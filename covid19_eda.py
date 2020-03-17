@@ -31,6 +31,14 @@ def readTimeSeriesData(path, case):
     return data
 
 
+def readDailyReportData(path, dataFile):
+    '''Read in daily report data and add column of file date'''
+    
+    data = pd.read_csv('{}\\{}'.format(path, dataFile))
+    data['reportDate'] = dataFile.replace('.csv','')
+    
+    return data
+
 #%% ENVIRONMENT
 ## ############################################################################
     
@@ -76,7 +84,7 @@ stateAbrev = {
     'OR' : 'Oregon',
     'PA' : 'Pennsylvania',
     'RI' : 'Rhode Island',
-    'SC' : 'south Carolina',
+    'SC' : 'South Carolina',
     'SD' : 'South Dakota',
     'TN' : 'Tennessee',
     'TX' : 'Texas',
@@ -95,21 +103,77 @@ stateAbrev = {
 
 path = 'csse_covid_19_data\\csse_covid_19_daily_reports'
 
+# Load files and add report date
 dailyReport = pd.concat([
-    pd.read_csv('{}\\{}'.format(path, f)) for f in os.listdir(path)
+    readDailyReportData(path, f) for f in os.listdir(path)
     if f.endswith('.csv') == True
     ],
     axis = 0,
+    ignore_index = True,
     sort = True
+    ).fillna({'Province/State' : 'x'})
+
+
+
+# Change to datetimestamp format
+for col in ['Last Update', 'reportDate']:
+    dailyReport[col] = [
+        str(dte.date()) 
+        for dte in pd.to_datetime(dailyReport[col])
+        ]
+
+
+# Sort data
+dailyReport.sort_values(
+    ['Country/Region', 'Province/State', 'reportDate']
+    , inplace = True
+    )
+
+# Flag for dates where the data is current and not carryover
+dailyReport['dataIsCurrent'] = [
+    reportDate == lastUpdate
+    for reportDate, lastUpdate in 
+    dailyReport[['reportDate', 'Last Update']].values.tolist()
+    ]
+
+
+# Split out state for US cities
+dailyReport['USstate'] = [
+    (location.split(',')[-1]).strip()
+    if len(location.split(',')) > 1 else 'x'
+    for location in dailyReport['Province/State'].fillna('x').values.tolist()
+    ]
+
+
+dailyReport['Province/State_Agg'] = [
+    stateAbrev.get(st, loc)
+    for st, loc in 
+    dailyReport[['USstate', 'Province/State']].values.tolist()
+    ]
+
+#%% US STATE dataIsCurrent BOOLEAN
+## ############################################################################
+
+# Populate US States current status flag from aggregate of cities
+dailyReportState = (dailyReport.groupby(
+    ['Country/Region', 'Province/State_Agg', 'reportDate']
+    )
+    .agg({
+        'dataIsCurrent':np.max
+        })
+    .rename({'dataIsCurrent' : 'dataIsCurrentState'})
     )
 
 
+# Update dataIsCurrent with state level info where necessary
+
+# Filter down to only current data
+dailyReportActual = dailyReport[dailyReport['dataIsCurrent'] == True]
 
 
 #%% TIME SERIES DATA INGESTION
 ## ############################################################################
 path = 'csse_covid_19_data\\\csse_covid_19_time_series'
-
 
 
 timeSeriesReport = pd.concat([
@@ -149,6 +213,33 @@ timeSeriesReportMelt = timeSeriesReport.melt(
 timeSeriesReportMelt['date'] = pd.to_datetime(timeSeriesReportMelt['date'])
 
 
+# Create string of timestamp
+timeSeriesReportMelt['dateString'] = [
+    str(dte.date()) for dte in timeSeriesReportMelt['date']
+    ]
+
+
+# Add dateIsCurrent Boolean
+timeSeriesReportMelt = timeSeriesReportMelt.merge(
+    pd.DataFrame(
+        dailyReport.set_index(['Country/Region', 'Province/State', 'reportDate']
+                              )['dataIsCurrent']
+        ), 
+    left_on = ['Country/Region', 'Province/State', 'dateString'],
+    right_index = True,
+    how = 'left'
+    )
+
+
+# Create column for interpolating data
+timeSeriesReportMelt['cumlCountInterpolated'] = [
+    cumlCount if ((dataIsCurrent == True) 
+     | (cumlCount == 0 & np.isnan(dataIsCurrent))
+     ) else np.nan
+    for cumlCount, dataIsCurrent in 
+    timeSeriesReportMelt[['cumlCount', 'dataIsCurrent']].values.tolist()
+    ]
+
 
 #%% TIME SERIES DATA AGGREGATION
 ## ############################################################################
@@ -159,7 +250,7 @@ timeSeriesReportMeltPivot = timeSeriesReportMelt.pivot_table(
              'Lat', 'Long', 
              'date', 'USstate',
              'Province/State_Agg'],
-    values = 'cumlCount',
+    values = ['cumlCount', 'cumlCountInterpolated'],
     columns = 'status',
     aggfunc = np.sum,
     fill_value = 0
@@ -269,11 +360,11 @@ plt.tight_layout()
 
 
 
-#%% AGGREGATE US CASES BY STATE
+#%% STORE TIME SERIES DATA
 ## ############################################################################
 
-# Dataset switches from city level to state level, so aggregate historical
-# city level into the state level for continuity
+
+timeSeriesCountry.to_csv()
 
 
 
