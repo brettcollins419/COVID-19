@@ -107,14 +107,16 @@ stateAbrev = {
 path = 'csse_covid_19_data\\csse_covid_19_daily_reports'
 
 # Load files and add report date
-dailyReport = pd.concat([
+dailyReport = (pd.concat([
     readDailyReportData(path, f) for f in os.listdir(path)
     if f.endswith('.csv') == True
     ],
     axis = 0,
     ignore_index = True,
     sort = True
-    ).fillna({'Province/State' : 'x'})
+    )
+    .fillna({'Province/State' : 'x'})
+    )
 
 
 
@@ -140,22 +142,22 @@ dailyReport['dataIsCurrent'] = [
     ]
 
 
-# Split out state for US cities
-dailyReport['USstate'] = [
-    (location.split(',')[-1]).strip()
-    if len(location.split(',')) > 1 else 'x'
-    for location in dailyReport['Province/State'].fillna('x').values.tolist()
-    ]
+# # Split out state for US cities
+# dailyReport['USstate'] = [
+#     (location.split(',')[-1]).strip()
+#     if len(location.split(',')) > 1 else 'x'
+#     for location in dailyReport['Province/State'].fillna('x').values.tolist()
+#     ]
 
 
-dailyReport['Province/State_Agg'] = [
-    stateAbrev.get(st, loc)
-    for st, loc in 
-    dailyReport[['USstate', 'Province/State']].values.tolist()
-    ]
+# dailyReport['Province/State_Agg'] = [
+#     stateAbrev.get(st, loc)
+#     for st, loc in 
+#     dailyReport[['USstate', 'Province/State']].values.tolist()
+#     ]
 
 
-
+dailyReport.to_csv('dailyReport_test.csv', index = False)
 
 
 #%% US STATE dataIsCurrent BOOLEAN
@@ -227,7 +229,7 @@ timeSeriesReportMelt['dateString'] = [
 
 
 # Add dateIsCurrent Boolean
-timeSeriesReportMelt = timeSeriesReportMelt.merge(
+timeSeriesReportMelt = (timeSeriesReportMelt.merge(
     pd.DataFrame(
         dailyReport.set_index(['Country/Region', 'Province/State', 'reportDate']
                               )['dataIsCurrent']
@@ -235,7 +237,9 @@ timeSeriesReportMelt = timeSeriesReportMelt.merge(
     left_on = ['Country/Region', 'Province/State', 'dateString'],
     right_index = True,
     how = 'left'
-    ).fillna({'dataIsCurrent' : False})
+    )
+    .fillna({'dataIsCurrent' : False})
+    )
 
 
 # Create column for interpolating data
@@ -265,7 +269,7 @@ timeSeriesReportMeltPivot = timeSeriesReportMelt.pivot_table(
     ).reset_index()
 
 
-
+timeSeriesReportMeltPivot.to_csv('timeSeriesReportMeltPivot_teset.csv', index = False)
 
 # Group by Country and Aggregated Province/State
 timeSeriesStateProv = (
