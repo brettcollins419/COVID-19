@@ -14,6 +14,9 @@ import string
 from itertools import chain
 from matplotlib import pyplot as plt
 import seaborn as sns
+from datetime import date, timedelta
+
+
 
 #%% FUNCTIONS
 ## ############################################################################
@@ -151,6 +154,10 @@ dailyReport['Province/State_Agg'] = [
     dailyReport[['USstate', 'Province/State']].values.tolist()
     ]
 
+
+
+
+
 #%% US STATE dataIsCurrent BOOLEAN
 ## ############################################################################
 
@@ -228,17 +235,17 @@ timeSeriesReportMelt = timeSeriesReportMelt.merge(
     left_on = ['Country/Region', 'Province/State', 'dateString'],
     right_index = True,
     how = 'left'
-    )
+    ).fillna({'dataIsCurrent' : False})
 
 
 # Create column for interpolating data
-timeSeriesReportMelt['cumlCountInterpolated'] = [
-    cumlCount if ((dataIsCurrent == True) 
-     | (cumlCount == 0 & np.isnan(dataIsCurrent))
-     ) else np.nan
-    for cumlCount, dataIsCurrent in 
-    timeSeriesReportMelt[['cumlCount', 'dataIsCurrent']].values.tolist()
-    ]
+# timeSeriesReportMelt['cumlCountInterpolated'] = [
+#     cumlCount if ((dataIsCurrent == True) 
+#      | (cumlCount == 0 & np.isnan(dataIsCurrent))
+#      ) else np.nan
+#     for cumlCount, dataIsCurrent in 
+#     timeSeriesReportMelt[['cumlCount', 'dataIsCurrent']].values.tolist()
+#     ]
 
 
 #%% TIME SERIES DATA AGGREGATION
@@ -249,8 +256,9 @@ timeSeriesReportMeltPivot = timeSeriesReportMelt.pivot_table(
     index = ['Province/State', 'Country/Region', 
              'Lat', 'Long', 
              'date', 'USstate',
-             'Province/State_Agg'],
-    values = ['cumlCount', 'cumlCountInterpolated'],
+             'Province/State_Agg',
+             'dataIsCurrent'],
+    values = 'cumlCount',
     columns = 'status',
     aggfunc = np.sum,
     fill_value = 0
@@ -268,7 +276,8 @@ timeSeriesStateProv = (
             'Long' : np.mean,
             'Confirmed': np.sum,
             'Deaths' : np.sum,
-            'Recovered' : np.sum
+            'Recovered' : np.sum,
+            'dataIsCurrent' : np.max
              })
         .reset_index()
     )
@@ -284,7 +293,8 @@ timeSeriesCountry = (
             'Long' : np.mean,
             'Confirmed': np.sum,
             'Deaths' : np.sum,
-            'Recovered' : np.sum
+            'Recovered' : np.sum,
+            'dataIsCurrent' : np.max
              })
         .reset_index()
     )
