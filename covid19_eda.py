@@ -15,7 +15,7 @@ from itertools import chain, combinations, product
 from matplotlib import pyplot as plt
 import seaborn as sns
 from datetime import date, timedelta
-
+from collections import defaultdict
 
 
 #%% FUNCTIONS
@@ -112,6 +112,37 @@ stateAbrev = {
     }
 
 
+# Traslate fields for alignment
+# Column, From, To
+translations = [
+    ('Country/Region', 'Mainland China', 'China'),
+    ('Country/Region', 'UK', 'United Kingdom'),
+    ('Country/Region', 'Iran.*', 'Iran'),
+    ('Country/Region', ' Azerbaijan', 'Azerbaijan'),
+    ('Country/Region', 'Hong Kong SAR', 'Hong Kong'),
+    ('Country/Region', 'Korea, South', 'South Korea'),
+    ('Country/Region', 'Viet Nam', 'Vietnam'),
+    ('Country/Region', 'Taiwan\*', 'Taiwan'),
+    ('Country/Region', '.*Congo.*', 'Congo'),
+    ]
+
+
+# Convert tranlations to dictionary format for pd.replace
+translationDict = {
+    'to_replace': {},
+    'value':{}
+    }
+
+# Populate translationDict
+for translation in translations:
+    col, transFrom, transTo = translation
+
+    translationDict['to_replace'].setdefault(col, []).append(transFrom)
+    translationDict['value'].setdefault(col, []).append(transTo)
+
+
+
+
 #%% DAILY REPORT DATA INGESTION
 ## ############################################################################
 
@@ -131,8 +162,10 @@ dailyReport = (
               sort = True
               )
     .fillna({'Province/State' : 'x'})
+    .replace(to_replace = translationDict['to_replace'],
+             value = translationDict['value'],
+             regex = True)
     )
-
 
 
 # Change to datetimestamp format
@@ -287,11 +320,11 @@ dailyReportFullState = (
         ['Country/Region', 'Province/State_Agg', 'reportDate']
         )
     .agg({
-        'Confirmed': np.sum,
-        'Deaths': np.sum,
-        'Recovered': np.sum,
-        'Open': np.sum,
-        'dataIsCurrent': np.max
+        'Confirmed': sum,
+        'Deaths': sum,
+        'Recovered': sum,
+        'Open': sum,
+        'dataIsCurrent': max
         })
     .reset_index()
     )
@@ -299,41 +332,45 @@ dailyReportFullState = (
 
 # Country level
 dailyReportFullCountry = (
-    dailyReportFull.groupby(
+    dailyReportFull.fillna(0).groupby(
         ['Country/Region', 'reportDate']
         )
     .agg({
-        'Confirmed': np.sum,
-        'Deaths': np.sum,
-        'Recovered': np.sum,
-        'Open': np.sum,
-        'dataIsCurrent': np.max
+        'Confirmed': sum,
+        'Deaths': sum,
+        'Recovered': sum,
+        'Open': sum,
+        'dataIsCurrent': max
         })
     .reset_index()
     )
 
 
-confirmedThreshold = 50
-
-# Dates where confirmed cases above threshold
-dailyReportFullCountry['daysAfterOnset'] = [
-    dte if confirmed >= confirmedThreshold
-    else np.nan
-    for dte, confirmed in 
-    dailyReportFullCountry[['reportDate', 'Confirmed']].values.tolist()
-    ]
+confirmedThreshold = 0
 
 
 # Date of first case and total # of cases for each country
 countryCases = (
-    dailyReportFullCountry[dailyReportFullCountry['Confirmed'] >= 1]
+    dailyReportFullCountry[
+        dailyReportFullCountry['Confirmed'] >= confirmedThreshold
+        ]
         .groupby(['Country/Region'])
-        .agg({'reportDate' : np.min,
-              # 'daysAfterOnset' : np.min,
-              'Confirmed' : np.max
+        .agg({'reportDate' : min,
+              'Confirmed' : max
               })
         .to_dict('index')
     )
+
+
+# Dates where confirmed cases above threshold
+dailyReportFullCountry['daysAfterOnset'] = [
+    countryCases.get(country).get
+    dte if confirmed >= confirmedThreshold
+    else None
+    for dte, confirmed in 
+    dailyReportFullCountry[['reportDate', 'Confirmed']].values.tolist()
+    ]
+
 
 
 #%% VISUALIZE MOST IMPACTED COUNTRIES
