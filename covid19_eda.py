@@ -11,7 +11,7 @@ import pandas as pd
 import time
 import re
 import string
-from itertools import chain
+from itertools import chain, combinations, product
 from matplotlib import pyplot as plt
 import seaborn as sns
 from datetime import date, timedelta
@@ -41,6 +41,17 @@ def readDailyReportData(path, dataFile):
     data['reportDate'] = dataFile.replace('.csv','')
     
     return data
+
+
+def extractUSState(location, stateAbrevDict):
+    '''Split city, state location and look up full name for state.
+        
+        Return full state name or original location name if no match
+        '''
+    
+    return stateAbrevDict.get((location.split(',')[-1]).strip()[:2], location)
+    
+
 
 #%% ENVIRONMENT
 ## ############################################################################
@@ -106,15 +117,19 @@ stateAbrev = {
 
 path = 'csse_covid_19_data\\csse_covid_19_daily_reports'
 
+fileDates = [f.replace('.csv', '') 
+             for f in os.listdir(path)
+             if f.endswith('.csv') == True
+             ]
+
 # Load files and add report date
-dailyReport = (pd.concat([
-    readDailyReportData(path, f) for f in os.listdir(path)
-    if f.endswith('.csv') == True
-    ],
-    axis = 0,
-    ignore_index = True,
-    sort = True
-    )
+dailyReport = (
+    pd.concat([readDailyReportData(path, '{}.csv'.format(f)) 
+               for f in fileDates],
+              axis = 0,
+              ignore_index = True,
+              sort = True
+              )
     .fillna({'Province/State' : 'x'})
     )
 
@@ -160,24 +175,187 @@ dailyReport['dataIsCurrent'] = [
 dailyReport.to_csv('dailyReport_test.csv', index = False)
 
 
-#%% US STATE dataIsCurrent BOOLEAN
-## ############################################################################
+#%% DAILY REPORT DATA FILL
+## ###########################################################################
 
-# Populate US States current status flag from aggregate of cities
-dailyReportState = (dailyReport.groupby(
-    ['Country/Region', 'Province/State_Agg', 'reportDate']
+# Populate all days for all locations
+
+# All unique locations
+uniqueLocations = list(set(
+    [tuple(x) for x in 
+     dailyReport[['Country/Region', 'Province/State']].values]
+    ))
+
+# Create shell for filling data
+dailyReportFull = pd.DataFrame([
+    (*l, d) for l, d in 
+    product(uniqueLocations, 
+            [str(dte.date()) 
+             for dte in pd.to_datetime(fileDates)])
+    ],
+    columns = ['Country/Region', 'Province/State', 'reportDate']
     )
+
+
+# Populate with reported data
+dailyReportFull = (
+    dailyReportFull.set_index(
+        ['Country/Region', 'Province/State', 'reportDate']
+        )
+    .merge(dailyReport.set_index(
+        ['Country/Region', 'Province/State', 'reportDate']
+        ),
+        left_index = True,
+        right_index = True,
+        how = 'left'
+        )
+    .reset_index()
+    )
+
+
+# Fill in longitude and latitude empty data
+gpsDict = (
+    dailyReport
+        .groupby(['Country/Region', 'Province/State'])
+        .agg({
+            'Latitude': np.mean,
+            'Longitude': np.mean
+            })
+        .to_dict(orient = 'index')
+    )
+
+
+for gps in ['Latitude', 'Longitude']:
+    dailyReportFull[gps] = [
+        gpsDict.get((country, state), {gps:coords}).get(gps, coords)
+        for country, state, coords in 
+        dailyReportFull[['Country/Region', 'Province/State', gps]].values.tolist()
+        ]
+
+
+
+# Fill all dates prior to first report date with 0
+firstReportDateDict = {}
+for case in ('Confirmed', 'Deaths', 'Recovered'):
+    firstReportDateDict[case] = (
+        dailyReport[dailyReport[case] > 0]
+        .groupby(['Country/Region', 'Province/State'])
+        .agg({
+            'reportDate' : np.min
+            })
+        .to_dict(orient = 'index')
+    )
+    
+    dailyReportFull[case] = [
+        0 if dte < firstReportDateDict[case].get((country, state), 
+                                           {'reportDate': dte}
+                                           ).get('reportDate')
+        else caseCount
+        for country, state, dte, caseCount in
+        dailyReportFull[['Country/Region', 'Province/State', 
+                         'reportDate', case]].values.tolist()   
+        ]
+    
+ 
+
+dailyReportFull['Province/State_Agg'] = [
+    extractUSState(location, stateAbrev) if country == 'US'
+    else location for country, location in 
+    dailyReportFull[['Country/Region', 'Province/State']].values.tolist()
+    ]
+    
+
+# Calculate open cases    
+dailyReportFull['Open'] = (
+    dailyReportFull['Confirmed'].fillna(0) - 
+    dailyReportFull['Deaths'].fillna(0) -
+    dailyReportFull['Recovered'].fillna(0)
+    )
+
+# Fill empty isCurrent fields with False
+dailyReportFull.fillna({'dataIsCurrent':False}, inplace = True)
+
+
+dailyReportFull.to_csv('dailyReportFull_test.csv', index = False)
+
+#%% AGGREGATE DAILY data
+## ###########################################################################
+
+# State level
+dailyReportFullState = (
+    dailyReportFull.groupby(
+        ['Country/Region', 'Province/State_Agg', 'reportDate']
+        )
     .agg({
-        'dataIsCurrent':np.max
+        'Confirmed': np.sum,
+        'Deaths': np.sum,
+        'Recovered': np.sum,
+        'Open': np.sum,
+        'dataIsCurrent': np.max
         })
-    .rename({'dataIsCurrent' : 'dataIsCurrentState'})
+    .reset_index()
     )
 
 
-# Update dataIsCurrent with state level info where necessary
+# Country level
+dailyReportFullCountry = (
+    dailyReportFull.groupby(
+        ['Country/Region', 'reportDate']
+        )
+    .agg({
+        'Confirmed': np.sum,
+        'Deaths': np.sum,
+        'Recovered': np.sum,
+        'Open': np.sum,
+        'dataIsCurrent': np.max
+        })
+    .reset_index()
+    )
 
-# Filter down to only current data
-dailyReportActual = dailyReport[dailyReport['dataIsCurrent'] == True]
+
+confirmedThreshold = 50
+
+# Dates where confirmed cases above threshold
+dailyReportFullCountry['daysAfterOnset'] = [
+    dte if confirmed >= confirmedThreshold
+    else np.nan
+    for dte, confirmed in 
+    dailyReportFullCountry[['reportDate', 'Confirmed']].values.tolist()
+    ]
+
+
+# Date of first case and total # of cases for each country
+countryCases = (
+    dailyReportFullCountry[dailyReportFullCountry['Confirmed'] >= 1]
+        .groupby(['Country/Region'])
+        .agg({'reportDate' : np.min,
+              # 'daysAfterOnset' : np.min,
+              'Confirmed' : np.max
+              })
+        .to_dict('index')
+    )
+
+
+#%% VISUALIZE MOST IMPACTED COUNTRIES
+## ###########################################################################
+
+fig, ax = plt.subplots(1)
+
+sns.lineplot(x = 'daysAfterOnset',
+             y = 'Confirmed',
+             hue = 'Country/Region',
+             palette= 'tab20',
+             data = dailyReportFullCountry[
+                 [(countryCases.get(country, 
+                                    {'Confirmed' : 0}
+                                    ).get('Confirmed') > 1000)
+                  for country in 
+                  dailyReportFullCountry['Country/Region'].values.tolist()
+                  ]],
+             ax = ax)
+
+plt.grid()
+plt.tight_layout()
 
 
 #%% TIME SERIES DATA INGESTION
