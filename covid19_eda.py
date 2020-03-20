@@ -53,6 +53,24 @@ def extractUSState(location, stateAbrevDict):
     
 
 
+def daysAfterOnset(dte, country, countryCases):
+    '''Calculate days after onset of outbreak give the country, current date
+        and outbreak date
+        
+    Return day delta
+    '''
+    
+    firstDate = countryCases.get(country, 
+                                {'reportDate' : dte}
+                                ).get('reportDate')
+    
+    daysAfterOnset = (pd.to_datetime(dte) - pd.to_datetime(firstDate)).days
+  
+    # return firstDate
+    
+    return daysAfterOnset
+
+
 #%% ENVIRONMENT
 ## ############################################################################
     
@@ -246,6 +264,8 @@ dailyReportFull = (
     )
 
 
+
+
 # Fill in longitude and latitude empty data
 gpsDict = (
     dailyReport
@@ -301,6 +321,21 @@ dailyReportFull['Province/State_Agg'] = [
     ]
     
 
+# Flag missing data
+dailyReportFull['missingData'] = (
+    dailyReportFull[['Confirmed', 'Deaths', 'Recovered']]
+    .isna()
+    .any(axis = 1)
+    )
+
+
+# Fill Missing Data
+for case in ('Confirmed', 'Deaths', 'Recovered'):
+    dailyReportFull[case] = (
+        dailyReportFull.groupby(['Country/Region', 'Province/State'])[case]
+            .apply(lambda df: df.fillna(method = 'ffill')).fillna(0)
+        )
+
 # Calculate open cases    
 dailyReportFull['Open'] = (
     dailyReportFull['Confirmed'].fillna(0) - 
@@ -349,6 +384,13 @@ dailyReportFullCountry = (
     )
 
 
+# Calculate Death Rate
+dailyReportFullCountry['deathRate'] = (
+    dailyReportFullCountry['Deaths'] 
+    / dailyReportFullCountry['Confirmed']
+    )
+
+
 confirmedThreshold = 100
 
 
@@ -365,22 +407,6 @@ countryCases = (
     )
 
 
-def daysAfterOnset(dte, country, countryCases):
-    '''Calculate days after onset of outbreak give the country, current date
-        and outbreak date
-        
-    Return day delta
-    '''
-    
-    firstDate = countryCases.get(country, 
-                                {'reportDate' : dte}
-                                ).get('reportDate')
-    
-    daysAfterOnset = (pd.to_datetime(dte) - pd.to_datetime(firstDate)).days
-  
-    # return firstDate
-    
-    return daysAfterOnset
 
 
 # Dates where confirmed cases above threshold
@@ -390,6 +416,16 @@ dailyReportFullCountry['daysAfterOnset'] = [
     dailyReportFullCountry[['reportDate', 'Country/Region']].values.tolist()
     ]
 
+
+#%% MOST RECENT DATA
+## ############################################################################
+
+currentStats = (
+    dailyReportFullCountry[
+        (dailyReportFullCountry['reportDate'] 
+        == dailyReportFullCountry['reportDate'].max())
+        & (dailyReportFullCountry['Confirmed'] > 1000)]
+    )
 
 
 #%% VISUALIZE MOST IMPACTED COUNTRIES
@@ -404,7 +440,7 @@ sns.lineplot(x = 'daysAfterOnset',
              data = dailyReportFullCountry[
                  [(countryCases.get(country, 
                                     {'Confirmed' : 0}
-                                    ).get('Confirmed') > 1000)
+                                    ).get('Confirmed') > 5000)
                   for country in 
                   dailyReportFullCountry['Country/Region'].values.tolist()
                   ]],
@@ -412,6 +448,8 @@ sns.lineplot(x = 'daysAfterOnset',
 
 plt.grid()
 plt.tight_layout()
+
+
 
 
 #%% TIME SERIES DATA INGESTION
