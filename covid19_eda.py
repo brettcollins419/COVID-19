@@ -270,6 +270,8 @@ for gps in ['Latitude', 'Longitude']:
 # Fill all dates prior to first report date with 0
 firstReportDateDict = {}
 for case in ('Confirmed', 'Deaths', 'Recovered'):
+    
+    # Get first report date for each case type
     firstReportDateDict[case] = (
         dailyReport[dailyReport[case] > 0]
         .groupby(['Country/Region', 'Province/State'])
@@ -279,6 +281,7 @@ for case in ('Confirmed', 'Deaths', 'Recovered'):
         .to_dict(orient = 'index')
     )
     
+    # Fill dates prior to first report date with 0
     dailyReportFull[case] = [
         0 if dte < firstReportDateDict[case].get((country, state), 
                                            {'reportDate': dte}
@@ -346,7 +349,7 @@ dailyReportFullCountry = (
     )
 
 
-confirmedThreshold = 0
+confirmedThreshold = 100
 
 
 # Date of first case and total # of cases for each country
@@ -362,13 +365,29 @@ countryCases = (
     )
 
 
+def daysAfterOnset(dte, country, countryCases):
+    '''Calculate days after onset of outbreak give the country, current date
+        and outbreak date
+        
+    Return day delta
+    '''
+    
+    firstDate = countryCases.get(country, 
+                                {'reportDate' : dte}
+                                ).get('reportDate')
+    
+    daysAfterOnset = (pd.to_datetime(dte) - pd.to_datetime(firstDate)).days
+  
+    # return firstDate
+    
+    return daysAfterOnset
+
+
 # Dates where confirmed cases above threshold
 dailyReportFullCountry['daysAfterOnset'] = [
-    countryCases.get(country).get
-    dte if confirmed >= confirmedThreshold
-    else None
-    for dte, confirmed in 
-    dailyReportFullCountry[['reportDate', 'Confirmed']].values.tolist()
+    max(daysAfterOnset(dte, country, countryCases), 0)
+    for dte, country in 
+    dailyReportFullCountry[['reportDate', 'Country/Region']].values.tolist()
     ]
 
 
