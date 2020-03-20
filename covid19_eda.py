@@ -53,22 +53,156 @@ def extractUSState(location, stateAbrevDict):
     
 
 
-def daysAfterOnset(dte, country, countryCases):
+def daysAfterOnset(dte, levelOfDetail, onsetDict):
     '''Calculate days after onset of outbreak give the country, current date
         and outbreak date
         
     Return day delta
     '''
     
-    firstDate = countryCases.get(country, 
+    firstDate = onsetDict.get(levelOfDetail, 
                                 {'reportDate' : dte}
                                 ).get('reportDate')
     
     daysAfterOnset = (pd.to_datetime(dte) - pd.to_datetime(firstDate)).days
   
-    # return firstDate
     
     return daysAfterOnset
+
+
+
+
+def generateOnsetDict(dailyData, levelOfDetail, 
+                      thresholdMetric, thresholdValue, 
+                      aggDict = {
+                          'reportDate' : min,
+                          'Confirmed' : max,
+                          'Deaths' : max,
+                          'Latitude' : np.mean,
+                          'Longitude' : np.mean
+                      }
+                      ):
+    
+    '''Return dictionary by levelOfDetail with the first date where
+        the threshold Value is exceeded
+    '''
+    
+    
+    onsetDict = (
+        dailyData[dailyData[thresholdMetric] >= thresholdValue]
+            .groupby(levelOfDetail)
+            .agg(aggDict)
+            .to_dict('index')
+        )
+    
+    return onsetDict
+
+
+
+def calculateDaysAferOnset(dailyData, levelOfDetail, 
+                            thresholdMetric, thresholdValue, 
+                            aggDict = {
+                                'reportDate' : min,
+                                'Confirmed' : max,
+                                'Deaths' : max,
+                                'Latitude' : np.mean,
+                                'Longitude' : np.mean
+                                }
+                            ):
+        
+    '''Add a column to dailyData with the # of days after onset of outbreak'''
+                         
+    # Identify first date of outbreak                                    
+    onsetDict = generateOnsetDict(dailyData, levelOfDetail, 
+                      thresholdMetric, thresholdValue, aggDict)
+    
+    
+    # Populate days after column
+    
+    # Special handling for multi-index levelOfDetail
+    if (((type(levelOfDetail) == tuple) | (type(levelOfDetail) == list))
+        & (len(levelOfDetail) > 1)):
+        dailyData['daysAfterOnset'] = [
+            max(daysAfterOnset(cols[0], tuple(cols[1:]), onsetDict), 0)
+            for cols in 
+            dailyData[['reportDate', *levelOfDetail]].values.tolist()
+            ]   
+        
+        
+    # Single level of detail        
+    else:
+        dailyData['daysAfterOnset'] = [
+            max(daysAfterOnset(cols[0], cols[1], onsetDict), 0)
+            for cols in 
+            dailyData[['reportDate', levelOfDetail]].values.tolist()
+            ]       
+        
+  
+    return dailyData
+    
+
+def aggregateDailyReport(dailyData, levelOfDetail,
+                         dailyAggDict = {
+                             'Confirmed': sum,
+                             'Deaths': sum,
+                             'Recovered': sum,
+                             'Open': sum,
+                             'dataIsCurrent': max,
+                             'Longitude': np.mean,
+                             'Latitude': np.mean
+                             },
+                         thresholdMetric = 'Confirmed',
+                         thresholdValue = 100,
+                         calculateOutbreak = True,
+                         onsetAggDict = {
+                             'reportDate' : min,
+                             'Confirmed' : max,
+                             'Deaths' : max,
+                             'Latitude' : np.mean,
+                             'Longitude' : np.mean
+                             }
+                         ):
+
+    
+    '''Aggregate daily daily to the desired level of detail and calculate
+        days after outbreak if desired.
+        Return aggregated dataframe at daily level by levelOfDetail 
+    '''
+    
+    # Append reportDate for Aggregation
+    if (type(levelOfDetail) == list) | (type(levelOfDetail) == tuple):
+        dailyAgg = levelOfDetail + ['reportDate']
+        
+    else:
+        dailyAgg = [levelOfDetail, 'reportDate']
+        
+        
+    # Aggregate daily data
+    dailyDataAgg = (
+        dailyData.fillna(0).groupby(dailyAgg)
+        .agg(dailyAggDict)
+        .reset_index()
+        )   
+   
+    
+    # Calculate Death Rate
+    dailyDataAgg['deathRate'] = (
+        dailyDataAgg['Deaths'] 
+        / dailyDataAgg['Confirmed']
+        ).fillna(0)
+    
+    
+    # Calculate days after outbreak
+    if calculateOutbreak == True:
+        dailyDataAgg = calculateDaysAferOnset(
+            dailyDataAgg, levelOfDetail, 
+            thresholdMetric, thresholdValue, 
+            aggDict = onsetAggDict 
+            )
+
+
+    return dailyDataAgg
+
 
 
 #%% ENVIRONMENT
@@ -349,72 +483,44 @@ dailyReportFull.fillna({'dataIsCurrent':False}, inplace = True)
 
 dailyReportFull.to_csv('dailyReportFull_test.csv', index = False)
 
-#%% AGGREGATE DAILY data
+#%% AGGREGATE DAILY DATA
 ## ###########################################################################
 
-# State level
-dailyReportFullState = (
-    dailyReportFull.groupby(
-        ['Country/Region', 'Province/State_Agg', 'reportDate']
-        )
-    .agg({
-        'Confirmed': sum,
-        'Deaths': sum,
-        'Recovered': sum,
-        'Open': sum,
-        'dataIsCurrent': max
-        })
-    .reset_index()
+
+
+
+dailyReportFullCountry = aggregateDailyReport(
+    dailyData = dailyReportFull,
+    levelOfDetail = 'Country/Region',
+    thresholdMetric = 'Confirmed',
+    thresholdValue = 100
     )
 
 
-# Country level
-dailyReportFullCountry = (
-    dailyReportFull.fillna(0).groupby(
-        ['Country/Region', 'reportDate']
-        )
-    .agg({
-        'Confirmed': sum,
-        'Deaths': sum,
-        'Recovered': sum,
-        'Open': sum,
-        'dataIsCurrent': max
-        })
-    .reset_index()
-    )
-
-
-# Calculate Death Rate
-dailyReportFullCountry['deathRate'] = (
-    dailyReportFullCountry['Deaths'] 
-    / dailyReportFullCountry['Confirmed']
-    )
-
-
-confirmedThreshold = 100
-
-
-# Date of first case and total # of cases for each country
-countryCases = (
-    dailyReportFullCountry[
-        dailyReportFullCountry['Confirmed'] >= confirmedThreshold
-        ]
-        .groupby(['Country/Region'])
-        .agg({'reportDate' : min,
-              'Confirmed' : max
-              })
-        .to_dict('index')
+dailyReportFullState = aggregateDailyReport(
+    dailyData = dailyReportFull,
+    levelOfDetail = ['Country/Region', 'Province/State_Agg'],
+    thresholdMetric = 'Confirmed',
+    thresholdValue = 50
     )
 
 
 
+countryCases =generateOnsetDict(
+    dailyData = dailyReportFullCountry, 
+    levelOfDetail = 'Country/Region', 
+    thresholdMetric = 'Confirmed', 
+    thresholdValue = 100)
 
-# Dates where confirmed cases above threshold
-dailyReportFullCountry['daysAfterOnset'] = [
-    max(daysAfterOnset(dte, country, countryCases), 0)
-    for dte, country in 
-    dailyReportFullCountry[['reportDate', 'Country/Region']].values.tolist()
-    ]
+
+stateCases =generateOnsetDict(
+    dailyData = dailyReportFullState, 
+    levelOfDetail = ['Country/Region', 'Province/State_Agg'], 
+    thresholdMetric = 'Confirmed', 
+    thresholdValue = 100)
+
+
+
 
 
 #%% MOST RECENT DATA
@@ -431,26 +537,44 @@ currentStats = (
 #%% VISUALIZE MOST IMPACTED COUNTRIES
 ## ###########################################################################
 
-fig, ax = plt.subplots(1)
+fig, axArr = plt.subplots(nrows = 1, ncols = 3, figsize = (10,6))
 
-sns.lineplot(x = 'daysAfterOnset',
-             y = 'Confirmed',
-             hue = 'Country/Region',
-             palette= 'tab20',
-             data = dailyReportFullCountry[
-                 [(countryCases.get(country, 
-                                    {'Confirmed' : 0}
-                                    ).get('Confirmed') > 5000)
-                  for country in 
-                  dailyReportFullCountry['Country/Region'].values.tolist()
-                  ]],
-             ax = ax)
+for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
 
-plt.grid()
-plt.tight_layout()
+    plotDict = {
+        'x' : 'daysAfterOnset',
+        'y' : case,
+        'hue' : 'Country/Region',
+        'palette' : 'tab20',
+        'data' : dailyReportFullCountry[
+            [(countryCases.get(country, 
+                               {'Confirmed' : 0}
+                               ).get('Confirmed') > 5000)
+             for country in 
+             dailyReportFullCountry['Country/Region'].values.tolist()
+             ]],
+        'ax' : axArr[ax]
+        }
 
 
 
+    sns.lineplot(**plotDict)
+    
+    plotDict.update(legend = False)
+    
+    sns.scatterplot(**plotDict)
+
+    axArr[ax].grid(True)
+    plt.tight_layout()
+    
+    if case == 'deathRate':
+        axArr[ax].set_ylim((0,0.1))
+
+
+
+
+#%% DEV
+## ###########################################################################
 
 #%% TIME SERIES DATA INGESTION
 ## ############################################################################
