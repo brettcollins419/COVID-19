@@ -15,7 +15,7 @@ from itertools import chain, combinations, product
 from matplotlib import pyplot as plt
 import seaborn as sns
 from datetime import date, timedelta
-
+from collections import defaultdict
 
 
 #%% FUNCTIONS
@@ -112,6 +112,37 @@ stateAbrev = {
     }
 
 
+# Traslate fields for alignment
+# Column, From, To
+translations = [
+    ('Country/Region', 'Mainland China', 'China'),
+    ('Country/Region', 'UK', 'United Kingdom'),
+    ('Country/Region', 'Iran.*', 'Iran'),
+    ('Country/Region', ' Azerbaijan', 'Azerbaijan'),
+    ('Country/Region', 'Hong Kong SAR', 'Hong Kong'),
+    ('Country/Region', 'Korea, South', 'South Korea'),
+    ('Country/Region', 'Viet Nam', 'Vietnam'),
+    ('Country/Region', 'Taiwan\*', 'Taiwan'),
+    ('Country/Region', '.*Congo.*', 'Congo'),
+    ]
+
+
+# Convert tranlations to dictionary format for pd.replace
+translationDict = {
+    'to_replace': {},
+    'value':{}
+    }
+
+# Populate translationDict
+for translation in translations:
+    col, transFrom, transTo = translation
+
+    translationDict['to_replace'].setdefault(col, []).append(transFrom)
+    translationDict['value'].setdefault(col, []).append(transTo)
+
+
+
+
 #%% DAILY REPORT DATA INGESTION
 ## ############################################################################
 
@@ -131,8 +162,10 @@ dailyReport = (
               sort = True
               )
     .fillna({'Province/State' : 'x'})
+    .replace(to_replace = translationDict['to_replace'],
+             value = translationDict['value'],
+             regex = True)
     )
-
 
 
 # Change to datetimestamp format
@@ -237,6 +270,8 @@ for gps in ['Latitude', 'Longitude']:
 # Fill all dates prior to first report date with 0
 firstReportDateDict = {}
 for case in ('Confirmed', 'Deaths', 'Recovered'):
+    
+    # Get first report date for each case type
     firstReportDateDict[case] = (
         dailyReport[dailyReport[case] > 0]
         .groupby(['Country/Region', 'Province/State'])
@@ -246,6 +281,7 @@ for case in ('Confirmed', 'Deaths', 'Recovered'):
         .to_dict(orient = 'index')
     )
     
+    # Fill dates prior to first report date with 0
     dailyReportFull[case] = [
         0 if dte < firstReportDateDict[case].get((country, state), 
                                            {'reportDate': dte}
@@ -287,11 +323,11 @@ dailyReportFullState = (
         ['Country/Region', 'Province/State_Agg', 'reportDate']
         )
     .agg({
-        'Confirmed': np.sum,
-        'Deaths': np.sum,
-        'Recovered': np.sum,
-        'Open': np.sum,
-        'dataIsCurrent': np.max
+        'Confirmed': sum,
+        'Deaths': sum,
+        'Recovered': sum,
+        'Open': sum,
+        'dataIsCurrent': max
         })
     .reset_index()
     )
@@ -299,41 +335,61 @@ dailyReportFullState = (
 
 # Country level
 dailyReportFullCountry = (
-    dailyReportFull.groupby(
+    dailyReportFull.fillna(0).groupby(
         ['Country/Region', 'reportDate']
         )
     .agg({
-        'Confirmed': np.sum,
-        'Deaths': np.sum,
-        'Recovered': np.sum,
-        'Open': np.sum,
-        'dataIsCurrent': np.max
+        'Confirmed': sum,
+        'Deaths': sum,
+        'Recovered': sum,
+        'Open': sum,
+        'dataIsCurrent': max
         })
     .reset_index()
     )
 
 
-confirmedThreshold = 50
-
-# Dates where confirmed cases above threshold
-dailyReportFullCountry['daysAfterOnset'] = [
-    dte if confirmed >= confirmedThreshold
-    else np.nan
-    for dte, confirmed in 
-    dailyReportFullCountry[['reportDate', 'Confirmed']].values.tolist()
-    ]
+confirmedThreshold = 100
 
 
 # Date of first case and total # of cases for each country
 countryCases = (
-    dailyReportFullCountry[dailyReportFullCountry['Confirmed'] >= 1]
+    dailyReportFullCountry[
+        dailyReportFullCountry['Confirmed'] >= confirmedThreshold
+        ]
         .groupby(['Country/Region'])
-        .agg({'reportDate' : np.min,
-              # 'daysAfterOnset' : np.min,
-              'Confirmed' : np.max
+        .agg({'reportDate' : min,
+              'Confirmed' : max
               })
         .to_dict('index')
     )
+
+
+def daysAfterOnset(dte, country, countryCases):
+    '''Calculate days after onset of outbreak give the country, current date
+        and outbreak date
+        
+    Return day delta
+    '''
+    
+    firstDate = countryCases.get(country, 
+                                {'reportDate' : dte}
+                                ).get('reportDate')
+    
+    daysAfterOnset = (pd.to_datetime(dte) - pd.to_datetime(firstDate)).days
+  
+    # return firstDate
+    
+    return daysAfterOnset
+
+
+# Dates where confirmed cases above threshold
+dailyReportFullCountry['daysAfterOnset'] = [
+    max(daysAfterOnset(dte, country, countryCases), 0)
+    for dte, country in 
+    dailyReportFullCountry[['reportDate', 'Country/Region']].values.tolist()
+    ]
+
 
 
 #%% VISUALIZE MOST IMPACTED COUNTRIES
