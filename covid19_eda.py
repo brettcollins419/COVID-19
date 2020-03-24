@@ -16,6 +16,7 @@ from matplotlib import pyplot as plt
 import seaborn as sns
 from datetime import date, timedelta
 from collections import defaultdict
+from win32api import GetSystemMetrics
 
 
 #%% FUNCTIONS
@@ -34,10 +35,26 @@ def readTimeSeriesData(path, case):
     return data
 
 
-def readDailyReportData(path, dataFile):
+def readDailyReportData(path, dataFile, colRenameDict):
     '''Read in daily report data and add column of file date'''
     
-    data = pd.read_csv('{}\\{}'.format(path, dataFile))
+    data = pd.read_csv('{}\\{}'.format(path, dataFile)
+                       ).rename(columns = colRenameDict)
+    
+    
+    # Error handle for file name changes on 3/23/20
+    if dataFile[:-4] >= '03-23-2020':
+        data = (
+            data.groupby(['Country/Region', 'Province/State'])
+                .agg({'Last Update':max,
+                      'Longitude':np.mean,
+                      'Latitude':np.mean,
+                      'Confirmed':sum,
+                      'Deaths':sum,
+                      'Recovered':sum})
+                .reset_index()
+                )
+    
     data['reportDate'] = dataFile.replace('.csv','')
     
     return data
@@ -179,7 +196,9 @@ def aggregateDailyReport(dailyData, levelOfDetail,
         
     # Aggregate daily data
     dailyDataAgg = (
-        dailyData.fillna(0).groupby(dailyAgg)
+        dailyData
+        # .fillna(0)
+        .groupby(dailyAgg)
         .agg(dailyAggDict)
         .reset_index()
         )   
@@ -305,9 +324,20 @@ fileDates = [f.replace('.csv', '')
              if f.endswith('.csv') == True
              ]
 
+
+# Rename columns for concatenation alignment
+colRenameDict = {
+    'Country_Region':'Country/Region',
+    'Province_State':'Province/State',
+    'Last_Update':'Last Update',
+    'Lat':'Latitude',
+    'Long_':'Longitude',
+    }
+
+
 # Load files and add report date
 dailyReport = (
-    pd.concat([readDailyReportData(path, '{}.csv'.format(f)) 
+    pd.concat([readDailyReportData(path, '{}.csv'.format(f), colRenameDict) 
                for f in fileDates],
               axis = 0,
               ignore_index = True,
@@ -340,21 +370,6 @@ dailyReport['dataIsCurrent'] = [
     for reportDate, lastUpdate in 
     dailyReport[['reportDate', 'Last Update']].values.tolist()
     ]
-
-
-# # Split out state for US cities
-# dailyReport['USstate'] = [
-#     (location.split(',')[-1]).strip()
-#     if len(location.split(',')) > 1 else 'x'
-#     for location in dailyReport['Province/State'].fillna('x').values.tolist()
-#     ]
-
-
-# dailyReport['Province/State_Agg'] = [
-#     stateAbrev.get(st, loc)
-#     for st, loc in 
-#     dailyReport[['USstate', 'Province/State']].values.tolist()
-#     ]
 
 
 dailyReport.to_csv('dailyReport_test.csv', index = False)
@@ -517,7 +532,7 @@ stateCases =generateOnsetDict(
     dailyData = dailyReportFullState, 
     levelOfDetail = ['Country/Region', 'Province/State_Agg'], 
     thresholdMetric = 'Confirmed', 
-    thresholdValue = 100)
+    thresholdValue = 50)
 
 
 
@@ -537,7 +552,12 @@ currentStats = (
 #%% VISUALIZE MOST IMPACTED COUNTRIES
 ## ###########################################################################
 
-fig, axArr = plt.subplots(nrows = 1, ncols = 3, figsize = (10,6))
+sns.set_context('talk')
+
+fig, axArr = plt.subplots(nrows = 1, ncols = 3,
+                          figsize = (0.9*GetSystemMetrics(0)//96, 
+                                    0.8*GetSystemMetrics(1)//96)
+                          )
 
 for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
 
@@ -570,211 +590,281 @@ for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
     if case == 'deathRate':
         axArr[ax].set_ylim((0,0.1))
 
+        axArr[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
+                           axArr[ax].get_yticks()
+                           )
+                       )
 
+#%% VISUALIZE US STATES
+## ############################################################################
+
+fig, axArr = plt.subplots(nrows = 1, ncols = 3,
+                          figsize = (0.9*GetSystemMetrics(0)//96, 
+                                    0.8*GetSystemMetrics(1)//96)
+                          )
+
+plotData = dailyReportFullState[
+    (dailyReportFullState['Country/Region'] == 'US')
+    & (dailyReportFullState['Confirmed'] > 20)
+    & [stateCases.get((country, state), 
+                      {'Confirmed':0}
+                      ).get('Confirmed') > 200
+    for country, state in 
+    dailyReportFullState[['Country/Region', 'Province/State_Agg']].values.tolist()]
+    ]
+
+
+
+for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
+
+    plotDict = {
+        'x' : 'reportDate',
+        'y' : case,
+        'hue' : 'Province/State_Agg',
+        'palette' : 'tab20',
+        'data' : plotData,
+        'ax' : axArr[ax]
+        }
+
+
+
+    sns.lineplot(**plotDict)
+    
+    plotDict.update(legend = False)
+    
+    sns.scatterplot(**plotDict)
+
+    axArr[ax].tick_params(labelrotation = 90)
+
+    axArr[ax].grid(True)
+    plt.tight_layout()
+    
+    if case == 'deathRate':
+        axArr[ax].set_ylim((0,0.1))
+
+        axArr[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
+                           axArr[ax].get_yticks()
+                           )
+                       )
+
+
+#%% SAVE FILES
+## ############################################################################
+        
+dailyReportFullState.to_csv(
+    'output_data\\dailyReportFullState.csv', 
+    index = False
+    )
+
+   
+dailyReportFullCountry.to_csv(
+    'output_data\\dailyReportFullCountry.csv', 
+    index = False
+    )
 
 
 #%% DEV
 ## ###########################################################################
 
-#%% TIME SERIES DATA INGESTION
-## ############################################################################
-path = 'csse_covid_19_data\\\csse_covid_19_time_series'
+# #%% TIME SERIES DATA INGESTION
+# ## ############################################################################
+# path = 'csse_covid_19_data\\\csse_covid_19_time_series'
 
 
-timeSeriesReport = pd.concat([
-    readTimeSeriesData(path, case) 
-    for case in ('Confirmed', 'Deaths', 'Recovered')
-    ],
-    axis = 0
-    ).fillna({'Province/State' : 'x'})
+# timeSeriesReport = pd.concat([
+#     readTimeSeriesData(path, case) 
+#     for case in ('Confirmed', 'Deaths', 'Recovered')
+#     ],
+#     axis = 0
+#     ).fillna({'Province/State' : 'x'})
 
 
 
 
-timeSeriesReport['USstate'] = [
-    (location.split(',')[-1]).strip()
-    if len(location.split(',')) > 1 else 'x'
-    for location in timeSeriesReport['Province/State'].fillna('x').values.tolist()
-    ]
-
-
-timeSeriesReport['Province/State_Agg'] = [
-    stateAbrev.get(st, loc)
-    for st, loc in 
-    timeSeriesReport[['USstate', 'Province/State']].values.tolist()
-    ]
-
-timeSeriesReportMelt = timeSeriesReport.melt(
-    id_vars = ['Province/State', 'Country/Region', 
-               'Lat', 'Long', 
-               'status', 'USstate',
-               'Province/State_Agg'],
-    var_name = 'date',
-    value_name = 'cumlCount'
-    )
-    
-
-# Convert to timestamp
-timeSeriesReportMelt['date'] = pd.to_datetime(timeSeriesReportMelt['date'])
-
-
-# Create string of timestamp
-timeSeriesReportMelt['dateString'] = [
-    str(dte.date()) for dte in timeSeriesReportMelt['date']
-    ]
-
-
-# Add dateIsCurrent Boolean
-timeSeriesReportMelt = (timeSeriesReportMelt.merge(
-    pd.DataFrame(
-        dailyReport.set_index(['Country/Region', 'Province/State', 'reportDate']
-                              )['dataIsCurrent']
-        ), 
-    left_on = ['Country/Region', 'Province/State', 'dateString'],
-    right_index = True,
-    how = 'left'
-    )
-    .fillna({'dataIsCurrent' : False})
-    )
-
-
-# Create column for interpolating data
-# timeSeriesReportMelt['cumlCountInterpolated'] = [
-#     cumlCount if ((dataIsCurrent == True) 
-#      | (cumlCount == 0 & np.isnan(dataIsCurrent))
-#      ) else np.nan
-#     for cumlCount, dataIsCurrent in 
-#     timeSeriesReportMelt[['cumlCount', 'dataIsCurrent']].values.tolist()
+# timeSeriesReport['USstate'] = [
+#     (location.split(',')[-1]).strip()
+#     if len(location.split(',')) > 1 else 'x'
+#     for location in timeSeriesReport['Province/State'].fillna('x').values.tolist()
 #     ]
 
 
-#%% TIME SERIES DATA AGGREGATION
-## ############################################################################
+# timeSeriesReport['Province/State_Agg'] = [
+#     stateAbrev.get(st, loc)
+#     for st, loc in 
+#     timeSeriesReport[['USstate', 'Province/State']].values.tolist()
+#     ]
 
-# Align Confirmed, Recovered, and Death columns per day
-timeSeriesReportMeltPivot = timeSeriesReportMelt.pivot_table(
-    index = ['Province/State', 'Country/Region', 
-             'Lat', 'Long', 
-             'date', 'USstate',
-             'Province/State_Agg',
-             'dataIsCurrent'],
-    values = 'cumlCount',
-    columns = 'status',
-    aggfunc = np.sum,
-    fill_value = 0
-    ).reset_index()
+# timeSeriesReportMelt = timeSeriesReport.melt(
+#     id_vars = ['Province/State', 'Country/Region', 
+#                'Lat', 'Long', 
+#                'status', 'USstate',
+#                'Province/State_Agg'],
+#     var_name = 'date',
+#     value_name = 'cumlCount'
+#     )
+    
 
-
-timeSeriesReportMeltPivot.to_csv('timeSeriesReportMeltPivot_teset.csv', index = False)
-
-# Group by Country and Aggregated Province/State
-timeSeriesStateProv = (
-    timeSeriesReportMeltPivot
-        .groupby(['Country/Region', 'Province/State_Agg', 'date'])
-        .agg({
-            'Lat' : np.mean,
-            'Long' : np.mean,
-            'Confirmed': np.sum,
-            'Deaths' : np.sum,
-            'Recovered' : np.sum,
-            'dataIsCurrent' : np.max
-             })
-        .reset_index()
-    )
+# # Convert to timestamp
+# timeSeriesReportMelt['date'] = pd.to_datetime(timeSeriesReportMelt['date'])
 
 
-
-# Group data by country
-timeSeriesCountry = (
-    timeSeriesReportMeltPivot
-        .groupby(['Country/Region', 'date'])
-        .agg({
-            'Lat' : np.mean,
-            'Long' : np.mean,
-            'Confirmed': np.sum,
-            'Deaths' : np.sum,
-            'Recovered' : np.sum,
-            'dataIsCurrent' : np.max
-             })
-        .reset_index()
-    )
+# # Create string of timestamp
+# timeSeriesReportMelt['dateString'] = [
+#     str(dte.date()) for dte in timeSeriesReportMelt['date']
+#     ]
 
 
-#%% IDENTIFY ONSET DATE
-## ############################################################################
-
-confirmedThreshold = 50
-
-# Dates where confirmed cases above threshold
-timeSeriesCountry['daysAfterOnset'] = [
-    dte if confirmed >= confirmedThreshold
-    else None
-    for dte, confirmed in 
-    timeSeriesCountry[['date', 'Confirmed']].values.tolist()
-    ]
-
-
-
-# Date of first case and total # of cases for each country
-countryCases = (
-    timeSeriesCountry[timeSeriesCountry['Confirmed'] >= 1]
-        .groupby(['Country/Region'])
-        .agg({'date' : np.min,
-              'daysAfterOnset' : np.min,
-              'Confirmed' : np.max
-              })
-        .to_dict('index')
-    )
+# # Add dateIsCurrent Boolean
+# timeSeriesReportMelt = (timeSeriesReportMelt.merge(
+#     pd.DataFrame(
+#         dailyReport.set_index(['Country/Region', 'Province/State', 'reportDate']
+#                               )['dataIsCurrent']
+#         ), 
+#     left_on = ['Country/Region', 'Province/State', 'dateString'],
+#     right_index = True,
+#     how = 'left'
+#     )
+#     .fillna({'dataIsCurrent' : False})
+#     )
 
 
-# Create date use field in case country doesn't have minimum # of cases
-[d.update(dateUse = [
-    d['date'] if pd.isna(d['daysAfterOnset']) else d['daysAfterOnset']][0])
-    for d in countryCases.values()
-]
+# # Create column for interpolating data
+# # timeSeriesReportMelt['cumlCountInterpolated'] = [
+# #     cumlCount if ((dataIsCurrent == True) 
+# #      | (cumlCount == 0 & np.isnan(dataIsCurrent))
+# #      ) else np.nan
+# #     for cumlCount, dataIsCurrent in 
+# #     timeSeriesReportMelt[['cumlCount', 'dataIsCurrent']].values.tolist()
+# #     ]
+
+
+# #%% TIME SERIES DATA AGGREGATION
+# ## ############################################################################
+
+# # Align Confirmed, Recovered, and Death columns per day
+# timeSeriesReportMeltPivot = timeSeriesReportMelt.pivot_table(
+#     index = ['Province/State', 'Country/Region', 
+#              'Lat', 'Long', 
+#              'date', 'USstate',
+#              'Province/State_Agg',
+#              'dataIsCurrent'],
+#     values = 'cumlCount',
+#     columns = 'status',
+#     aggfunc = np.sum,
+#     fill_value = 0
+#     ).reset_index()
+
+
+# timeSeriesReportMeltPivot.to_csv('timeSeriesReportMeltPivot_teset.csv', index = False)
+
+# # Group by Country and Aggregated Province/State
+# timeSeriesStateProv = (
+#     timeSeriesReportMeltPivot
+#         .groupby(['Country/Region', 'Province/State_Agg', 'date'])
+#         .agg({
+#             'Lat' : np.mean,
+#             'Long' : np.mean,
+#             'Confirmed': np.sum,
+#             'Deaths' : np.sum,
+#             'Recovered' : np.sum,
+#             'dataIsCurrent' : np.max
+#              })
+#         .reset_index()
+#     )
 
 
 
-timeSeriesCountry['daysSinceFirstCase'] = [
-    max((dte - countryCases.get(country, 
-                                {'dateUse' : dte}
-                                ).get('dateUse')
-         ).days, 0)
-    for country, dte in 
-    timeSeriesCountry[['Country/Region', 'date']].values.tolist()
-    ]
+# # Group data by country
+# timeSeriesCountry = (
+#     timeSeriesReportMeltPivot
+#         .groupby(['Country/Region', 'date'])
+#         .agg({
+#             'Lat' : np.mean,
+#             'Long' : np.mean,
+#             'Confirmed': np.sum,
+#             'Deaths' : np.sum,
+#             'Recovered' : np.sum,
+#             'dataIsCurrent' : np.max
+#              })
+#         .reset_index()
+#     )
+
+
+# #%% IDENTIFY ONSET DATE
+# ## ############################################################################
+
+# confirmedThreshold = 50
+
+# # Dates where confirmed cases above threshold
+# timeSeriesCountry['daysAfterOnset'] = [
+#     dte if confirmed >= confirmedThreshold
+#     else None
+#     for dte, confirmed in 
+#     timeSeriesCountry[['date', 'Confirmed']].values.tolist()
+#     ]
+
+
+
+# # Date of first case and total # of cases for each country
+# countryCases = (
+#     timeSeriesCountry[timeSeriesCountry['Confirmed'] >= 1]
+#         .groupby(['Country/Region'])
+#         .agg({'date' : np.min,
+#               'daysAfterOnset' : np.min,
+#               'Confirmed' : np.max
+#               })
+#         .to_dict('index')
+#     )
+
+
+# # Create date use field in case country doesn't have minimum # of cases
+# [d.update(dateUse = [
+#     d['date'] if pd.isna(d['daysAfterOnset']) else d['daysAfterOnset']][0])
+#     for d in countryCases.values()
+# ]
+
+
+
+# timeSeriesCountry['daysSinceFirstCase'] = [
+#     max((dte - countryCases.get(country, 
+#                                 {'dateUse' : dte}
+#                                 ).get('dateUse')
+#          ).days, 0)
+#     for country, dte in 
+#     timeSeriesCountry[['Country/Region', 'date']].values.tolist()
+#     ]
         
 
 
 
-#%% VISUALIZE MOST IMPACTED COUNTRIES
-## ###########################################################################
+# #%% VISUALIZE MOST IMPACTED COUNTRIES
+# ## ###########################################################################
 
-fig, ax = plt.subplots(1)
+# fig, ax = plt.subplots(1)
 
-sns.lineplot(x = 'daysSinceFirstCase',
-             y = 'Confirmed',
-             hue = 'Country/Region',
-             palette= 'tab20',
-             data = timeSeriesCountry[
-                 [(countryCases.get(country, 
-                                    {'Confirmed' : 0}
-                                    ).get('Confirmed') > 1000)
-                  for country in 
-                  timeSeriesCountry['Country/Region'].values.tolist()
-                  ]],
-             ax = ax)
+# sns.lineplot(x = 'daysSinceFirstCase',
+#              y = 'Confirmed',
+#              hue = 'Country/Region',
+#              palette= 'tab20',
+#              data = timeSeriesCountry[
+#                  [(countryCases.get(country, 
+#                                     {'Confirmed' : 0}
+#                                     ).get('Confirmed') > 1000)
+#                   for country in 
+#                   timeSeriesCountry['Country/Region'].values.tolist()
+#                   ]],
+#              ax = ax)
 
-plt.grid()
-plt.tight_layout()
-
-
-
-#%% STORE TIME SERIES DATA
-## ############################################################################
+# plt.grid()
+# plt.tight_layout()
 
 
-timeSeriesCountry.to_csv()
+
+# #%% STORE TIME SERIES DATA
+# ## ############################################################################
+
+
+# timeSeriesCountry.to_csv()
 
 
 
