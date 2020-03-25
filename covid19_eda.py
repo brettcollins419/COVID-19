@@ -295,6 +295,11 @@ translations = [
     ('Country/Region', 'Viet Nam', 'Vietnam'),
     ('Country/Region', 'Taiwan\*', 'Taiwan'),
     ('Country/Region', '.*Congo.*', 'Congo'),
+    ('Province/State', 'French Polynesia', 'France'), # added 3/24/20
+    ('Province/State', 'Fench Guiana', 'French Guiana'), # added 3/24/20
+    
+    
+    
     ]
 
 
@@ -646,6 +651,21 @@ for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
                            axArr[ax].get_yticks()
                            )
                        )
+
+
+
+#%% CALCULATE GROWTH RATE
+## ############################################################################
+
+for df, threshold in ((dailyReportFullState, 50), 
+                      (dailyReportFullCountry, 100)):
+    
+    df['growth_rate'] = [
+        (np.log(casesToday/threshold) / days) if days > 0 else 0
+        for days, casesToday in 
+        df[['daysAfterOnset', 'Confirmed']].values.tolist()
+        ]
+
 
 
 #%% SAVE FILES
