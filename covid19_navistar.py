@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Created on Fri Mar 13 13:16:46 2020
+Created on Wed Mar 25 11:25:10 2020
 
-@author: u00bec7
+@author: U00BEC7
 """
 
 import numpy as np
@@ -305,7 +305,6 @@ translations = [
     ('Country/Region', 'Mainland China', 'China'),
     ('Country/Region', 'UK', 'United Kingdom'),
     ('Country/Region', 'Iran.*', 'Iran'),
-    ('Country/Region', ' Azerbaijan', 'Azerbaijan'),
     ('Country/Region', 'Hong Kong SAR', 'Hong Kong'),
     ('Country/Region', 'Korea, South', 'South Korea'),
     ('Country/Region', 'Viet Nam', 'Vietnam'),
@@ -313,9 +312,13 @@ translations = [
     ('Country/Region', '.*Congo.*', 'Congo'),
     ('Province/State', 'French Polynesia', 'France'), # added 3/24/20
     ('Province/State', 'Fench Guiana', 'French Guiana'), # added 3/24/20
-    
-    
-    
+    ('Province/State', ' County', ''), # remove county from name added 3/25/20
+    ('Province/State', '.*Virgin Islands.*', 'Virgin Islands'), # added 3/25/20
+    ('Province/State', 'Calgary, Alberta', 'Alberta'), # Canada cleanup (added 3/25/20)
+    ('Province/State', 'Edmonton, Alberta', 'Alberta'), # Canada cleanup (added 3/25/20)
+    ('Province/State', 'London, ON', 'Ontario'), # Canada cleanup (added 3/25/20)
+    ('Province/State', 'Montreal, QC', 'Quebec'), # Canada cleanup (added 3/25/20)
+    ('Province/State', 'Toronto, ON', 'Ontario'), # Canada cleanup (added 3/25/20)
     ]
 
 
@@ -358,16 +361,18 @@ colRenameDict = {
 
 # Load files and add report date
 dailyReport = (
-    pd.concat([readDailyReportData(path, '{}.csv'.format(f), colRenameDict) 
-               for f in fileDates],
-              axis = 0,
-              ignore_index = True,
-              sort = True
-              )
-    .fillna({'Province/State' : 'x'})
+    pd.concat(
+        [readDailyReportDataAllFields(path, '{}.csv'.format(f), colRenameDict) 
+        for f in fileDates],
+        axis = 0,
+        ignore_index = True,
+        sort = True
+        )
+    .fillna({'Province/State' : '', 'Admin2': ''})
     .replace(to_replace = translationDict['to_replace'],
              value = translationDict['value'],
              regex = True)
+    .replace(to_replace = {'^ | $': ''}, regex = True)
     )
 
 
@@ -393,8 +398,62 @@ dailyReport['dataIsCurrent'] = [
     ]
 
 
-dailyReport.to_csv('dailyReport_test.csv', index = False)
+# Save File
+dailyReport.to_csv('output_data\\dailyReport_navistar.csv', index = False)
 
+
+#%% ERROR HANDING
+## ###########################################################################
+
+# France
+# Canada cities to provinces
+# US state level detail only 3/10-3/21
+
+# Flag diamond princess
+dailyReport['from_diamond_princess'] = [
+    len(re.findall('.*DIAMOND PRINCESS.*', state.upper())) >= 1
+    for state in dailyReport['Province/State'].values.tolist()
+    ]
+
+# Clean up diamond princess names
+#   First clean up name in US information
+#   Then clean up diamond princess names
+dailyReport['Province/State'] = [
+    re.sub('.*Diamond Princess.*', 'Diamond Princess', 
+            re.sub(' \(From Diamond Princess\)', '', state) 
+            )
+    for state in dailyReport['Province/State'].values.tolist()]
+
+
+# (dailyReport
+#      .replace(' \(From Diamond Princess\)', '', 
+#               regex = True)
+#      .replace('.*Diamond Princess.*', 'Diamond Princess', 
+#               regex = True, inplace = True)
+#      )
+
+    
+
+
+# Split city & state for all US data prior to 3/10
+dailyReport['Admin2'] = [
+    state.split(', ')[0] if ((admin2 == '') & (country == 'US'))
+    else admin2
+    for admin2, country, state in 
+    dailyReport[['Admin2', 'Country/Region', 'Province/State']].values.tolist()
+    ]
+
+
+
+# Look up and replace State name  for US
+dailyReport['Province/State'] = [
+    stateAbrev.get(state.split(', ')[-1], state) 
+    for state in 
+    dailyReport['Province/State'].values.tolist()
+    ]
+
+# Save File
+dailyReport.to_csv('output_data\\dailyReport_navistar_clean.csv', index = False)
 
 #%% DAILY REPORT DATA FILL
 ## ###########################################################################
@@ -901,6 +960,7 @@ dailyReportFullCountry.to_csv(
 
 
 # timeSeriesCountry.to_csv()
+
 
 
 
