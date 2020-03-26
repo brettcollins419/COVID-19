@@ -547,12 +547,19 @@ dailyReportState.sort_values(
 for df, threshold in ((dailyReportState, 50), 
                       (dailyReportCountry, 100)):
     
-    df['growth_rate'] = [
+    df['growthRate'] = [
         (np.log(casesToday/threshold) / days) if days > 0 else 0
         for days, casesToday in 
         df[['daysAfterOnset', 'Confirmed']].values.tolist()
         ]
     
+    
+    df['doublingRate'] = [
+        np.log(2)/growthRate if daysAfterOutbreak >= 5
+        else np.nan
+        for growthRate, daysAfterOutbreak in 
+        df[['growthRate', 'daysAfterOnset']].values.tolist()
+        ]
 
 #%% MOST RECENT DATA
 ## ############################################################################
@@ -565,7 +572,6 @@ currentStats = (
     )
 
 
-dailyReportState[dailyReportState['Country/Region']=='US']
 
 currentStatsUS = (
     dailyReportState[
@@ -579,14 +585,18 @@ currentStatsUS = (
 #%% VISUALIZE MOST IMPACTED COUNTRIES
 ## ###########################################################################
 
-sns.set_context('talk')
+sns.set_context('paper')
 
-fig, axArr = plt.subplots(nrows = 1, ncols = 3,
+fig, axArr = plt.subplots(nrows = 2, ncols = 2,
                           figsize = (0.9*GetSystemMetrics(0)//96, 
                                     0.8*GetSystemMetrics(1)//96)
                           )
 
-for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
+confirmedThreshold = 5000
+
+for ax, case in enumerate(
+        ('Confirmed', 'Deaths', 'deathRate', 'doublingRate')
+        ):
 
     plotDict = {
         'x' : 'daysAfterOnset',
@@ -596,11 +606,11 @@ for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
         'data' : dailyReportCountry[
             [(countryCases.get(country, 
                                {'Confirmed' : 0}
-                               ).get('Confirmed') > 5000)
+                               ).get('Confirmed') > confirmedThreshold)
              for country in 
              dailyReportCountry['Country/Region'].values.tolist()
              ]],
-        'ax' : axArr[ax]
+        'ax' : axArr.flatten()[ax]
         }
 
 
@@ -611,38 +621,58 @@ for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
     
     sns.scatterplot(**plotDict)
 
-    axArr[ax].grid(True)
-    plt.tight_layout()
+    axArr.flatten()[ax].grid(True)
+    # plt.tight_layout()
     
     if case == 'deathRate':
-        axArr[ax].set_ylim((0,0.1))
+        axArr.flatten()[ax].set_ylim((0,0.12))
 
-        axArr[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
-                           axArr[ax].get_yticks()
+        axArr.flatten()[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
+                           axArr.flatten()[ax].get_yticks()
                            )
                        )
+
+
+for i, ax in enumerate(axArr.flatten()):
+        # Put legend in 2nd figure
+    if i == 1:
+        ax.legend(bbox_to_anchor = (1.04,1), borderaxespad=0)
+    else:
+        ax.legend().remove()
+
+
+fig.suptitle('Countries with > {} Confirmed Cases'.format(confirmedThreshold), 
+             fontsize = 24)
+
+
 
 #%% VISUALIZE US STATES
 ## ############################################################################
 
-fig, axArr = plt.subplots(nrows = 1, ncols = 3,
+# Plot Confirmed Cases, Deaths, and Death Rate
+        
+fig, axArr = plt.subplots(nrows = 2, ncols = 2,
                           figsize = (0.9*GetSystemMetrics(0)//96, 
                                     0.8*GetSystemMetrics(1)//96)
                           )
 
+confirmedThreshold = 500
+
 plotData = dailyReportState[
     (dailyReportState['Country/Region'] == 'US')
-    & (dailyReportState['Confirmed'] > 20)
+    & (dailyReportState['Confirmed'] > 20) # At least 20 cases reports
     & [stateCases.get((country, state), 
                       {'Confirmed':0}
-                      ).get('Confirmed') > 200
+                      ).get('Confirmed') > confirmedThreshold # State has over 200 cases
     for country, state in 
     dailyReportState[['Country/Region', 'Province/State']].values.tolist()]
     ]
 
 
 
-for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
+for ax, case in enumerate(
+        ('Confirmed', 'Deaths', 'deathRate', 'doublingRate')
+        ):
 
     plotDict = {
         'x' : 'reportDate',
@@ -650,7 +680,7 @@ for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
         'hue' : 'Province/State',
         'palette' : 'tab20',
         'data' : plotData.sort_values('reportDate'),
-        'ax' : axArr[ax]
+        'ax' : axArr.flatten()[ax],
         }
 
 
@@ -661,32 +691,47 @@ for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
     
     sns.scatterplot(**plotDict)
 
-    axArr[ax].tick_params(labelrotation = 90)
+    axArr.flatten()[ax].tick_params(axis = 'x', labelrotation = 90)
+    # axArr.flatten()[ax].xticks(rotation = 90)
 
-    axArr[ax].grid(True)
-    plt.tight_layout()
-    
+    axArr.flatten()[ax].grid(True)
+
+
     if case == 'deathRate':
-        axArr[ax].set_ylim((0,0.1))
+        axArr.flatten()[ax].set_ylim((0,0.1))
 
-        axArr[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
-                           axArr[ax].get_yticks()
+        axArr.flatten()[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
+                           axArr.flatten()[ax].get_yticks()
                            )
                        )
 
+for i, ax in enumerate(axArr.flatten()):
+        # Put legend in 2nd figure
+    if i == 1:
+        ax.legend(bbox_to_anchor = (1.04,1), borderaxespad=0)
+    else:
+        ax.legend().remove()
 
+
+fig.suptitle('US States with > {} Confirmed Cases'.format(confirmedThreshold), 
+             fontsize = 24)
 
 #%% SAVE FILES
 ## ############################################################################
         
+dailyReport.to_csv(
+    'output_data\\dailyReport.csv', 
+    index = False
+    )
+
 dailyReportState.to_csv(
-    'output_data\\dailyReportFullState.csv', 
+    'output_data\\dailyReportState.csv', 
     index = False
     )
 
    
 dailyReportCountry.to_csv(
-    'output_data\\dailyReportFullCountry.csv', 
+    'output_data\\dailyReportCountry.csv', 
     index = False
     )
 
