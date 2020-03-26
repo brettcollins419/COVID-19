@@ -319,7 +319,8 @@ translations = [
     ('Province/State', 'London, ON', 'Ontario'), # Canada cleanup (added 3/25/20)
     ('Province/State', 'Montreal, QC', 'Quebec'), # Canada cleanup (added 3/25/20)
     ('Province/State', 'Toronto, ON', 'Ontario'), # Canada cleanup (added 3/25/20)
-    ]
+    ('Province/State', 'New York, NY', 'New York City'), # Canada cleanup (added 3/25/20)
+        ]
 
 
 # Convert tranlations to dictionary format for pd.replace
@@ -452,8 +453,243 @@ dailyReport['Province/State'] = [
     dailyReport['Province/State'].values.tolist()
     ]
 
+
 # Save File
-dailyReport.to_csv('output_data\\dailyReport_navistar_clean.csv', index = False)
+dailyReport.to_csv('output_data\\dailyReport_navistar_clean.csv', 
+                   index = False)
+
+
+#%% LOCATIONS GPS
+## ###########################################################################
+
+gpsDict = (
+    dailyReport
+        .groupby(['Country/Region', 'Province/State', 'Admin2'])
+        .agg({
+            'Latitude': np.mean,
+            'Longitude': np.mean
+            })
+        .to_dict(orient = 'index')
+    )
+
+
+for gps in ['Latitude', 'Longitude']:
+    dailyReport[gps] = [
+        gpsDict.get((country, state, admin2), {gps:coords}).get(gps, coords)
+        for country, state, admin2, coords in 
+        dailyReport[['Country/Region', 'Province/State', 
+                         'Admin2', gps]
+                        ].values.tolist()
+        ]
+
+
+#%% FEATURE ENGINEERING
+## ###########################################################################
+# Calculate open cases    
+dailyReport['Open'] = (
+    dailyReport['Confirmed'].fillna(0) - 
+    dailyReport['Deaths'].fillna(0) -
+    dailyReport['Recovered'].fillna(0)
+    )
+
+
+
+
+#%% AGGREGATE DAILY DATA
+## ###########################################################################
+
+
+dailyReportCountry = aggregateDailyReport(
+    dailyData = dailyReport,
+    levelOfDetail = 'Country/Region',
+    thresholdMetric = 'Confirmed',
+    thresholdValue = 100
+    )
+
+
+dailyReportState = aggregateDailyReport(
+    dailyData = dailyReport,
+    levelOfDetail = ['Country/Region', 'Province/State'],
+    thresholdMetric = 'Confirmed',
+    thresholdValue = 50
+    )
+
+
+
+countryCases =generateOnsetDict(
+    dailyData = dailyReportCountry, 
+    levelOfDetail = 'Country/Region', 
+    thresholdMetric = 'Confirmed', 
+    thresholdValue = 100)
+
+
+stateCases =generateOnsetDict(
+    dailyData = dailyReportState, 
+    levelOfDetail = ['Country/Region', 'Province/State'], 
+    thresholdMetric = 'Confirmed', 
+    thresholdValue = 50)
+
+
+dailyReportCountry.sort_values(
+    ['Country/Region', 'reportDate'],
+    inplace = True
+    )
+
+dailyReportState.sort_values(
+    ['Country/Region', 'Province/State', 'reportDate'],
+    inplace = True
+    )
+
+
+#%% CALCULATE GROWTH RATE
+## ############################################################################
+
+for df, threshold in ((dailyReportState, 50), 
+                      (dailyReportCountry, 100)):
+    
+    df['growth_rate'] = [
+        (np.log(casesToday/threshold) / days) if days > 0 else 0
+        for days, casesToday in 
+        df[['daysAfterOnset', 'Confirmed']].values.tolist()
+        ]
+    
+
+#%% MOST RECENT DATA
+## ############################################################################
+
+currentStats = (
+    dailyReportCountry[
+        (dailyReportCountry['reportDate'] 
+        == dailyReportCountry['reportDate'].max())
+        & (dailyReportCountry['Confirmed'] > 1000)]
+    )
+
+
+dailyReportState[dailyReportState['Country/Region']=='US']
+
+currentStatsUS = (
+    dailyReportState[
+        (dailyReportState['reportDate'] 
+        == dailyReportState['reportDate'].max())
+        & (dailyReportState['Confirmed'] > 100)
+        & (dailyReportState['Country/Region']=='US')]
+    )
+
+
+#%% VISUALIZE MOST IMPACTED COUNTRIES
+## ###########################################################################
+
+sns.set_context('talk')
+
+fig, axArr = plt.subplots(nrows = 1, ncols = 3,
+                          figsize = (0.9*GetSystemMetrics(0)//96, 
+                                    0.8*GetSystemMetrics(1)//96)
+                          )
+
+for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
+
+    plotDict = {
+        'x' : 'daysAfterOnset',
+        'y' : case,
+        'hue' : 'Country/Region',
+        'palette' : 'tab20',
+        'data' : dailyReportCountry[
+            [(countryCases.get(country, 
+                               {'Confirmed' : 0}
+                               ).get('Confirmed') > 5000)
+             for country in 
+             dailyReportCountry['Country/Region'].values.tolist()
+             ]],
+        'ax' : axArr[ax]
+        }
+
+
+
+    sns.lineplot(**plotDict)
+    
+    plotDict.update(legend = False)
+    
+    sns.scatterplot(**plotDict)
+
+    axArr[ax].grid(True)
+    plt.tight_layout()
+    
+    if case == 'deathRate':
+        axArr[ax].set_ylim((0,0.1))
+
+        axArr[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
+                           axArr[ax].get_yticks()
+                           )
+                       )
+
+#%% VISUALIZE US STATES
+## ############################################################################
+
+fig, axArr = plt.subplots(nrows = 1, ncols = 3,
+                          figsize = (0.9*GetSystemMetrics(0)//96, 
+                                    0.8*GetSystemMetrics(1)//96)
+                          )
+
+plotData = dailyReportState[
+    (dailyReportState['Country/Region'] == 'US')
+    & (dailyReportState['Confirmed'] > 20)
+    & [stateCases.get((country, state), 
+                      {'Confirmed':0}
+                      ).get('Confirmed') > 200
+    for country, state in 
+    dailyReportState[['Country/Region', 'Province/State']].values.tolist()]
+    ]
+
+
+
+for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
+
+    plotDict = {
+        'x' : 'reportDate',
+        'y' : case,
+        'hue' : 'Province/State',
+        'palette' : 'tab20',
+        'data' : plotData.sort_values('reportDate'),
+        'ax' : axArr[ax]
+        }
+
+
+
+    sns.lineplot(**plotDict)
+    
+    plotDict.update(legend = False)
+    
+    sns.scatterplot(**plotDict)
+
+    axArr[ax].tick_params(labelrotation = 90)
+
+    axArr[ax].grid(True)
+    plt.tight_layout()
+    
+    if case == 'deathRate':
+        axArr[ax].set_ylim((0,0.1))
+
+        axArr[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
+                           axArr[ax].get_yticks()
+                           )
+                       )
+
+
+
+#%% SAVE FILES
+## ############################################################################
+        
+dailyReportState.to_csv(
+    'output_data\\dailyReportFullState.csv', 
+    index = False
+    )
+
+   
+dailyReportCountry.to_csv(
+    'output_data\\dailyReportFullCountry.csv', 
+    index = False
+    )
+
 
 #%% DAILY REPORT DATA FILL
 ## ###########################################################################
@@ -463,7 +699,7 @@ dailyReport.to_csv('output_data\\dailyReport_navistar_clean.csv', index = False)
 # All unique locations
 uniqueLocations = list(set(
     [tuple(x) for x in 
-     dailyReport[['Country/Region', 'Province/State']].values]
+     dailyReport[['Country/Region', 'Province/State', 'Admin2']].values]
     ))
 
 # Create shell for filling data
@@ -473,17 +709,17 @@ dailyReportFull = pd.DataFrame([
             [str(dte.date()) 
              for dte in pd.to_datetime(fileDates)])
     ],
-    columns = ['Country/Region', 'Province/State', 'reportDate']
+    columns = ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
     )
 
 
 # Populate with reported data
 dailyReportFull = (
     dailyReportFull.set_index(
-        ['Country/Region', 'Province/State', 'reportDate']
+        ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
         )
     .merge(dailyReport.set_index(
-        ['Country/Region', 'Province/State', 'reportDate']
+        ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
         ),
         left_index = True,
         right_index = True,
@@ -495,23 +731,14 @@ dailyReportFull = (
 
 
 
-# Fill in longitude and latitude empty data
-gpsDict = (
-    dailyReport
-        .groupby(['Country/Region', 'Province/State'])
-        .agg({
-            'Latitude': np.mean,
-            'Longitude': np.mean
-            })
-        .to_dict(orient = 'index')
-    )
-
 
 for gps in ['Latitude', 'Longitude']:
     dailyReportFull[gps] = [
-        gpsDict.get((country, state), {gps:coords}).get(gps, coords)
-        for country, state, coords in 
-        dailyReportFull[['Country/Region', 'Province/State', gps]].values.tolist()
+        gpsDict.get((country, state, admin2), {gps:coords}).get(gps, coords)
+        for country, state, admin2, coords in 
+        dailyReportFull[['Country/Region', 'Province/State', 
+                         'Admin2', gps]
+                        ].values.tolist()
         ]
 
 
@@ -577,169 +804,6 @@ dailyReportFull.fillna({'dataIsCurrent':False}, inplace = True)
 
 
 dailyReportFull.to_csv('dailyReportFull_test.csv', index = False)
-
-#%% AGGREGATE DAILY DATA
-## ###########################################################################
-
-
-
-
-dailyReportFullCountry = aggregateDailyReport(
-    dailyData = dailyReportFull,
-    levelOfDetail = 'Country/Region',
-    thresholdMetric = 'Confirmed',
-    thresholdValue = 100
-    )
-
-
-dailyReportFullState = aggregateDailyReport(
-    dailyData = dailyReportFull,
-    levelOfDetail = ['Country/Region', 'Province/State_Agg'],
-    thresholdMetric = 'Confirmed',
-    thresholdValue = 50
-    )
-
-
-
-countryCases =generateOnsetDict(
-    dailyData = dailyReportFullCountry, 
-    levelOfDetail = 'Country/Region', 
-    thresholdMetric = 'Confirmed', 
-    thresholdValue = 100)
-
-
-stateCases =generateOnsetDict(
-    dailyData = dailyReportFullState, 
-    levelOfDetail = ['Country/Region', 'Province/State_Agg'], 
-    thresholdMetric = 'Confirmed', 
-    thresholdValue = 50)
-
-
-
-
-
-#%% MOST RECENT DATA
-## ############################################################################
-
-currentStats = (
-    dailyReportFullCountry[
-        (dailyReportFullCountry['reportDate'] 
-        == dailyReportFullCountry['reportDate'].max())
-        & (dailyReportFullCountry['Confirmed'] > 1000)]
-    )
-
-
-#%% VISUALIZE MOST IMPACTED COUNTRIES
-## ###########################################################################
-
-sns.set_context('talk')
-
-fig, axArr = plt.subplots(nrows = 1, ncols = 3,
-                          figsize = (0.9*GetSystemMetrics(0)//96, 
-                                    0.8*GetSystemMetrics(1)//96)
-                          )
-
-for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
-
-    plotDict = {
-        'x' : 'daysAfterOnset',
-        'y' : case,
-        'hue' : 'Country/Region',
-        'palette' : 'tab20',
-        'data' : dailyReportFullCountry[
-            [(countryCases.get(country, 
-                               {'Confirmed' : 0}
-                               ).get('Confirmed') > 5000)
-             for country in 
-             dailyReportFullCountry['Country/Region'].values.tolist()
-             ]],
-        'ax' : axArr[ax]
-        }
-
-
-
-    sns.lineplot(**plotDict)
-    
-    plotDict.update(legend = False)
-    
-    sns.scatterplot(**plotDict)
-
-    axArr[ax].grid(True)
-    plt.tight_layout()
-    
-    if case == 'deathRate':
-        axArr[ax].set_ylim((0,0.1))
-
-        axArr[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
-                           axArr[ax].get_yticks()
-                           )
-                       )
-
-#%% VISUALIZE US STATES
-## ############################################################################
-
-fig, axArr = plt.subplots(nrows = 1, ncols = 3,
-                          figsize = (0.9*GetSystemMetrics(0)//96, 
-                                    0.8*GetSystemMetrics(1)//96)
-                          )
-
-plotData = dailyReportFullState[
-    (dailyReportFullState['Country/Region'] == 'US')
-    & (dailyReportFullState['Confirmed'] > 20)
-    & [stateCases.get((country, state), 
-                      {'Confirmed':0}
-                      ).get('Confirmed') > 200
-    for country, state in 
-    dailyReportFullState[['Country/Region', 'Province/State_Agg']].values.tolist()]
-    ]
-
-
-
-for ax, case in enumerate(('Confirmed', 'Deaths', 'deathRate')):
-
-    plotDict = {
-        'x' : 'reportDate',
-        'y' : case,
-        'hue' : 'Province/State_Agg',
-        'palette' : 'tab20',
-        'data' : plotData,
-        'ax' : axArr[ax]
-        }
-
-
-
-    sns.lineplot(**plotDict)
-    
-    plotDict.update(legend = False)
-    
-    sns.scatterplot(**plotDict)
-
-    axArr[ax].tick_params(labelrotation = 90)
-
-    axArr[ax].grid(True)
-    plt.tight_layout()
-    
-    if case == 'deathRate':
-        axArr[ax].set_ylim((0,0.1))
-
-        axArr[ax].set_yticklabels(map(lambda v: '{:.0%}'.format(v), 
-                           axArr[ax].get_yticks()
-                           )
-                       )
-
-
-
-#%% CALCULATE GROWTH RATE
-## ############################################################################
-
-for df, threshold in ((dailyReportFullState, 50), 
-                      (dailyReportFullCountry, 100)):
-    
-    df['growth_rate'] = [
-        (np.log(casesToday/threshold) / days) if days > 0 else 0
-        for days, casesToday in 
-        df[['daysAfterOnset', 'Confirmed']].values.tolist()
-        ]
 
 
 
