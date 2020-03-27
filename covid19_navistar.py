@@ -544,6 +544,53 @@ dailyReportState.sort_values(
 #%% CALCULATE GROWTH RATE
 ## ############################################################################
 
+def rollingGrowthRate(df, windowSize = 4, case = 'Confirmed', outbreakThreshold = 3):
+    
+
+    df['rollingPctIncrease'] = (
+        (df[case].rolling(window = windowSize)
+                 .apply(lambda x: (x.iloc[-1] - x.iloc[0])/x.iloc[0])
+        ) /
+        (df['daysAfterOnset'].rolling(window = windowSize)
+             .apply(lambda x: x.iloc[-1] - x.iloc[0])
+             )
+        )
+    
+    df['rollingPctIncrease'] = [
+        increase if daysAfterOutbreak >= outbreakThreshold else np.nan
+        for increase, daysAfterOutbreak in 
+        df[['rollingPctIncrease', 'daysAfterOnset']].values.tolist()
+        ]
+    
+    
+    df['rollingGrowthRate'] = (df[case].rolling(window = windowSize)
+                 .apply(lambda x: np.log(x.iloc[-1] / x.iloc[0]))
+        /
+        (df['daysAfterOnset'].rolling(window = windowSize)
+             .apply(lambda x: x.iloc[-1] - x.iloc[0])
+             )
+        )
+
+
+    df['rollingGrowthRate'] = [
+        growthRate if daysAfterOutbreak >= outbreakThreshold else np.nan
+        for growthRate, daysAfterOutbreak in 
+        df[['rollingGrowthRate', 'daysAfterOnset']].values.tolist()
+        ]
+    
+    
+    df['rollingDoubleRate'] = [
+        np.log(2)/growthRate if daysAfterOutbreak >= outbreakThreshold
+        else np.nan
+        for growthRate, daysAfterOutbreak in 
+        df[['rollingGrowthRate', 'daysAfterOnset']].values.tolist()
+        ]
+    
+    return df
+
+
+
+
 for df, threshold in ((dailyReportState, 50), 
                       (dailyReportCountry, 100)):
     
@@ -560,6 +607,22 @@ for df, threshold in ((dailyReportState, 50),
         for growthRate, daysAfterOutbreak in 
         df[['growthRate', 'daysAfterOnset']].values.tolist()
         ]
+    
+    
+
+
+dailyReportCountry = (
+    dailyReportCountry
+        .groupby('Country/Region')
+        .apply(lambda c: rollingGrowthRate(c))
+        )
+
+dailyReportState = (
+    dailyReportState
+        .groupby(['Country/Region', 'Province/State'])
+        .apply(lambda c: rollingGrowthRate(c))
+        )
+
 
 #%% MOST RECENT DATA
 ## ############################################################################
@@ -585,7 +648,7 @@ currentStatsUS = (
 #%% VISUALIZE MOST IMPACTED COUNTRIES
 ## ###########################################################################
 
-sns.set_context('paper')
+sns.set_context('talk')
 
 fig, axArr = plt.subplots(nrows = 2, ncols = 2,
                           figsize = (0.9*GetSystemMetrics(0)//96, 
@@ -595,7 +658,7 @@ fig, axArr = plt.subplots(nrows = 2, ncols = 2,
 confirmedThreshold = 5000
 
 for ax, case in enumerate(
-        ('Confirmed', 'Deaths', 'deathRate', 'doublingRate')
+        ('Confirmed', 'Deaths', 'deathRate', 'rollingDoubleRate')
         ):
 
     plotDict = {
@@ -633,6 +696,10 @@ for ax, case in enumerate(
                        )
 
 
+    if case == 'rollingDoubleRate':
+        axArr.flatten()[ax].set_ylim((0,20))
+
+
 for i, ax in enumerate(axArr.flatten()):
         # Put legend in 2nd figure
     if i == 1:
@@ -656,7 +723,7 @@ fig, axArr = plt.subplots(nrows = 2, ncols = 2,
                                     0.8*GetSystemMetrics(1)//96)
                           )
 
-confirmedThreshold = 500
+confirmedThreshold = 2000
 
 plotData = dailyReportState[
     (dailyReportState['Country/Region'] == 'US')
@@ -671,7 +738,7 @@ plotData = dailyReportState[
 
 
 for ax, case in enumerate(
-        ('Confirmed', 'Deaths', 'deathRate', 'doublingRate')
+        ('Confirmed', 'Deaths', 'deathRate', 'rollingDoubleRate')
         ):
 
     plotDict = {
@@ -704,7 +771,10 @@ for ax, case in enumerate(
                            axArr.flatten()[ax].get_yticks()
                            )
                        )
-
+    if case == 'rollingDoubleRate':
+        axArr.flatten()[ax].set_ylim((0,20))
+        
+        
 for i, ax in enumerate(axArr.flatten()):
         # Put legend in 2nd figure
     if i == 1:
