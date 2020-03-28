@@ -648,7 +648,7 @@ currentStatsUS = (
 #%% VISUALIZE MOST IMPACTED COUNTRIES
 ## ###########################################################################
 
-sns.set_context('talk')
+sns.set_context('paper')
 
 fig, axArr = plt.subplots(nrows = 2, ncols = 2,
                           figsize = (0.9*GetSystemMetrics(0)//96, 
@@ -697,8 +697,11 @@ for ax, case in enumerate(
 
 
     if case == 'rollingDoubleRate':
-        axArr.flatten()[ax].set_ylim((0,20))
-
+        axArr.flatten()[ax].set_ylim(
+            (0, min(
+                max(axArr.flatten()[ax].get_ylim()), 20)
+                )
+            )
 
 for i, ax in enumerate(axArr.flatten()):
         # Put legend in 2nd figure
@@ -772,7 +775,12 @@ for ax, case in enumerate(
                            )
                        )
     if case == 'rollingDoubleRate':
-        axArr.flatten()[ax].set_ylim((0,20))
+        # 20 or the current axis limit, whichever is lower
+        axArr.flatten()[ax].set_ylim(
+            (0, min(
+                max(axArr.flatten()[ax].get_ylim()), 20)
+                )
+            )
         
         
 for i, ax in enumerate(axArr.flatten()):
@@ -785,6 +793,8 @@ for i, ax in enumerate(axArr.flatten()):
 
 fig.suptitle('US States with > {} Confirmed Cases'.format(confirmedThreshold), 
              fontsize = 24)
+
+
 
 #%% SAVE FILES
 ## ############################################################################
@@ -806,139 +816,126 @@ dailyReportCountry.to_csv(
     )
 
 
-#%% DAILY REPORT DATA FILL
-## ###########################################################################
-
-# Populate all days for all locations
-
-# All unique locations
-uniqueLocations = list(set(
-    [tuple(x) for x in 
-     dailyReport[['Country/Region', 'Province/State', 'Admin2']].values]
-    ))
-
-# Create shell for filling data
-dailyReportFull = pd.DataFrame([
-    (*l, d) for l, d in 
-    product(uniqueLocations, 
-            [str(dte.date()) 
-             for dte in pd.to_datetime(fileDates)])
-    ],
-    columns = ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
-    )
-
-
-# Populate with reported data
-dailyReportFull = (
-    dailyReportFull.set_index(
-        ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
-        )
-    .merge(dailyReport.set_index(
-        ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
-        ),
-        left_index = True,
-        right_index = True,
-        how = 'left'
-        )
-    .reset_index()
-    )
-
-
-
-
-
-for gps in ['Latitude', 'Longitude']:
-    dailyReportFull[gps] = [
-        gpsDict.get((country, state, admin2), {gps:coords}).get(gps, coords)
-        for country, state, admin2, coords in 
-        dailyReportFull[['Country/Region', 'Province/State', 
-                         'Admin2', gps]
-                        ].values.tolist()
-        ]
-
-
-
-# Fill all dates prior to first report date with 0
-firstReportDateDict = {}
-for case in ('Confirmed', 'Deaths', 'Recovered'):
-    
-    # Get first report date for each case type
-    firstReportDateDict[case] = (
-        dailyReport[dailyReport[case] > 0]
-        .groupby(['Country/Region', 'Province/State'])
-        .agg({
-            'reportDate' : np.min
-            })
-        .to_dict(orient = 'index')
-    )
-    
-    # Fill dates prior to first report date with 0
-    dailyReportFull[case] = [
-        0 if dte < firstReportDateDict[case].get((country, state), 
-                                           {'reportDate': dte}
-                                           ).get('reportDate')
-        else caseCount
-        for country, state, dte, caseCount in
-        dailyReportFull[['Country/Region', 'Province/State', 
-                         'reportDate', case]].values.tolist()   
-        ]
-    
- 
-
-dailyReportFull['Province/State_Agg'] = [
-    extractUSState(location, stateAbrev) if country == 'US'
-    else location for country, location in 
-    dailyReportFull[['Country/Region', 'Province/State']].values.tolist()
-    ]
-    
-
-# Flag missing data
-dailyReportFull['missingData'] = (
-    dailyReportFull[['Confirmed', 'Deaths', 'Recovered']]
-    .isna()
-    .any(axis = 1)
-    )
-
-
-# Fill Missing Data
-for case in ('Confirmed', 'Deaths', 'Recovered'):
-    dailyReportFull[case] = (
-        dailyReportFull.groupby(['Country/Region', 'Province/State'])[case]
-            .apply(lambda df: df.fillna(method = 'ffill')).fillna(0)
-        )
-
-# Calculate open cases    
-dailyReportFull['Open'] = (
-    dailyReportFull['Confirmed'].fillna(0) - 
-    dailyReportFull['Deaths'].fillna(0) -
-    dailyReportFull['Recovered'].fillna(0)
-    )
-
-# Fill empty isCurrent fields with False
-dailyReportFull.fillna({'dataIsCurrent':False}, inplace = True)
-
-
-dailyReportFull.to_csv('dailyReportFull_test.csv', index = False)
-
-
-
-#%% SAVE FILES
-## ############################################################################
-        
-dailyReportFullState.to_csv(
-    'output_data\\dailyReportFullState.csv', 
-    index = False
-    )
-
-   
-dailyReportFullCountry.to_csv(
-    'output_data\\dailyReportFullCountry.csv', 
-    index = False
-    )
 
 
 #%% DEV
 ## ###########################################################################
+
+# #%% DAILY REPORT DATA FILL
+# ## ###########################################################################
+
+# # Populate all days for all locations
+
+# # All unique locations
+# uniqueLocations = list(set(
+#     [tuple(x) for x in 
+#      dailyReport[['Country/Region', 'Province/State', 'Admin2']].values]
+#     ))
+
+# # Create shell for filling data
+# dailyReportFull = pd.DataFrame([
+#     (*l, d) for l, d in 
+#     product(uniqueLocations, 
+#             [str(dte.date()) 
+#              for dte in pd.to_datetime(fileDates)])
+#     ],
+#     columns = ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
+#     )
+
+
+# # Populate with reported data
+# dailyReportFull = (
+#     dailyReportFull.set_index(
+#         ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
+#         )
+#     .merge(dailyReport.set_index(
+#         ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
+#         ),
+#         left_index = True,
+#         right_index = True,
+#         how = 'left'
+#         )
+#     .reset_index()
+#     )
+
+
+
+
+
+# for gps in ['Latitude', 'Longitude']:
+#     dailyReportFull[gps] = [
+#         gpsDict.get((country, state, admin2), {gps:coords}).get(gps, coords)
+#         for country, state, admin2, coords in 
+#         dailyReportFull[['Country/Region', 'Province/State', 
+#                          'Admin2', gps]
+#                         ].values.tolist()
+#         ]
+
+
+
+# # Fill all dates prior to first report date with 0
+# firstReportDateDict = {}
+# for case in ('Confirmed', 'Deaths', 'Recovered'):
+    
+#     # Get first report date for each case type
+#     firstReportDateDict[case] = (
+#         dailyReport[dailyReport[case] > 0]
+#         .groupby(['Country/Region', 'Province/State'])
+#         .agg({
+#             'reportDate' : np.min
+#             })
+#         .to_dict(orient = 'index')
+#     )
+    
+#     # Fill dates prior to first report date with 0
+#     dailyReportFull[case] = [
+#         0 if dte < firstReportDateDict[case].get((country, state), 
+#                                            {'reportDate': dte}
+#                                            ).get('reportDate')
+#         else caseCount
+#         for country, state, dte, caseCount in
+#         dailyReportFull[['Country/Region', 'Province/State', 
+#                          'reportDate', case]].values.tolist()   
+#         ]
+    
+ 
+
+# dailyReportFull['Province/State_Agg'] = [
+#     extractUSState(location, stateAbrev) if country == 'US'
+#     else location for country, location in 
+#     dailyReportFull[['Country/Region', 'Province/State']].values.tolist()
+#     ]
+    
+
+# # Flag missing data
+# dailyReportFull['missingData'] = (
+#     dailyReportFull[['Confirmed', 'Deaths', 'Recovered']]
+#     .isna()
+#     .any(axis = 1)
+#     )
+
+
+# # Fill Missing Data
+# for case in ('Confirmed', 'Deaths', 'Recovered'):
+#     dailyReportFull[case] = (
+#         dailyReportFull.groupby(['Country/Region', 'Province/State'])[case]
+#             .apply(lambda df: df.fillna(method = 'ffill')).fillna(0)
+#         )
+
+# # Calculate open cases    
+# dailyReportFull['Open'] = (
+#     dailyReportFull['Confirmed'].fillna(0) - 
+#     dailyReportFull['Deaths'].fillna(0) -
+#     dailyReportFull['Recovered'].fillna(0)
+#     )
+
+# # Fill empty isCurrent fields with False
+# dailyReportFull.fillna({'dataIsCurrent':False}, inplace = True)
+
+
+# dailyReportFull.to_csv('dailyReportFull_test.csv', index = False)
+
+
 
 # #%% TIME SERIES DATA INGESTION
 # ## ############################################################################
