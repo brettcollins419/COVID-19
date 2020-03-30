@@ -11,13 +11,19 @@ import pandas as pd
 import time
 import re
 import string
-from itertools import chain, combinations, product
+from itertools import chain, combinations, product, repeat
 from matplotlib import pyplot as plt
 import seaborn as sns
 from datetime import date, timedelta
 from collections import defaultdict
 from win32api import GetSystemMetrics
+import sys
 
+# Format plots for 4k screens
+if plt.get_backend() == 'Qt5Agg':
+    from matplotlib.backends.qt_compat import QtWidgets
+    qApp = QtWidgets.QApplication(sys.argv)
+    plt.matplotlib.rcParams['figure.dpi'] = qApp.desktop().physicalDpiX()
 
 #%% FUNCTIONS
 ## ############################################################################
@@ -239,6 +245,173 @@ def aggregateDailyReport(dailyData, levelOfDetail,
     return dailyDataAgg
 
 
+def rollingGrowthRate(df, windowSize = 4, case = 'Confirmed', outbreakThreshold = 3):
+    
+
+    df['rollingPctIncrease'] = (
+        (df[case].rolling(window = windowSize)
+                 .apply(lambda x: (x.iloc[-1] - x.iloc[0])/x.iloc[0])
+        ) /
+        (df['daysAfterOnset'].rolling(window = windowSize)
+             .apply(lambda x: x.iloc[-1] - x.iloc[0])
+             )
+        )
+    
+    df['rollingPctIncrease'] = [
+        increase if daysAfterOutbreak >= outbreakThreshold else np.nan
+        for increase, daysAfterOutbreak in 
+        df[['rollingPctIncrease', 'daysAfterOnset']].values.tolist()
+        ]
+    
+    
+    df['rollingGrowthRate'] = (df[case].rolling(window = windowSize)
+                 .apply(lambda x: np.log(x.iloc[-1] / x.iloc[0]))
+        /
+        (df['daysAfterOnset'].rolling(window = windowSize)
+             .apply(lambda x: x.iloc[-1] - x.iloc[0])
+             )
+        )
+
+
+    df['rollingGrowthRate'] = [
+        growthRate if daysAfterOutbreak >= outbreakThreshold else np.nan
+        for growthRate, daysAfterOutbreak in 
+        df[['rollingGrowthRate', 'daysAfterOnset']].values.tolist()
+        ]
+    
+    
+    df['rollingDoubleRate'] = [
+        np.log(2)/growthRate if daysAfterOutbreak >= outbreakThreshold
+        else np.nan
+        for growthRate, daysAfterOutbreak in 
+        df[['rollingGrowthRate', 'daysAfterOnset']].values.tolist()
+        ]
+    
+    return df
+
+
+
+def estimateSIRb(di, dt, k, i0, s0):
+    '''Estimate b coefficient for SIR model
+    
+        retrun b
+    '''
+    
+    
+    b = ((di/dt) + k*i0) / (s0*i0)
+    
+    return b
+
+
+def rollingSIRb(df, 
+                windowSize = 4, 
+                case = 'infectedPct', 
+                k = 1/14,
+                outbreakThreshold = 3):
+    
+    # Change in infection %
+    diList = (df[case].rolling(window = windowSize)
+                 .apply(lambda x: x.iloc[-1] - x.iloc[0])
+        ).values.tolist()
+    
+    # time delta
+    dtList = (
+        df['daysAfterOnset']
+            .rolling(window = windowSize)
+            .apply(lambda x: x.iloc[-1] - x.iloc[0])
+            .values
+            .tolist()
+            )
+    
+    # starting infection %
+    i0List = (
+        df[case]
+            .rolling(window = windowSize)
+            .min()
+            .values
+            .tolist()
+            )
+    
+    # starting susceptible %
+    s0List = (
+        df['susceptiblePct']
+            .rolling(window = windowSize)
+            .min()
+            .values
+            .tolist()
+            )
+
+    
+    
+    
+    df['rollingSIRb'] = [
+        estimateSIRb(di, dt, k, i0, s0) if ((i0 > 0) & (dt > 0))
+        else np.nan
+        for di, dt, k, i0, s0
+        in zip(diList, dtList, repeat(k, len(diList)), i0List, s0List)
+        ]
+    
+    
+    
+    
+    df['rollingSIRb'] = [
+        increase if daysAfterOutbreak >= outbreakThreshold else np.nan
+        for increase, daysAfterOutbreak in 
+        df[['rollingSIRb', 'daysAfterOnset']].values.tolist()
+        ]
+       
+    
+    
+    return df
+
+
+
+def sirModelSim(N, I0, b, k, dayRange, R0 = 0, F0 = 0):
+    
+    '''Perform SIR model simulation.
+    
+        Return dataframe of susceptable, infected, and recovered by day'''
+    
+    # Empty lists for populating
+    s,i,r = [],[],[]
+    
+    # % susceptible start
+    s0 = (N - I0 - F0) / N
+    
+    # % infected
+    i0 = (I0 / N)
+    
+    # % recovered start
+    r0 = ((R0 + F0) / N)
+    
+    # s[0] = np.float16(s0) 
+    # i[0] = np.float16(i0)
+    # r[0] = np.float16(r0)
+    
+    
+    s.append(s0)
+    i.append(i0)
+    r.append(r0)
+    
+    for d in range(dayRange):
+        
+        s.append(s[d-1] - b*s[d-1]*i[d-1])
+        
+        r.append(r[d-1] + k*i[d-1])
+
+        i.append(i[d-1] + (b*s[d-1]*i[d-1] - k*i[d-1]))
+        
+        
+    sir = pd.DataFrame(
+        np.vstack((range(dayRange+1), s, i, r)).T,
+        columns = ['days', 'susceptiblePct', 'infectedPct', 'recoveredPct'])
+        
+
+    for col in ['susceptible', 'infected', 'recovered']:
+        sir[col] = N * sir['{}Pct'.format(col)]
+        
+        
+    return sir
 
 #%% ENVIRONMENT
 ## ############################################################################
@@ -544,52 +717,6 @@ dailyReportState.sort_values(
 #%% CALCULATE GROWTH RATE
 ## ############################################################################
 
-def rollingGrowthRate(df, windowSize = 4, case = 'Confirmed', outbreakThreshold = 3):
-    
-
-    df['rollingPctIncrease'] = (
-        (df[case].rolling(window = windowSize)
-                 .apply(lambda x: (x.iloc[-1] - x.iloc[0])/x.iloc[0])
-        ) /
-        (df['daysAfterOnset'].rolling(window = windowSize)
-             .apply(lambda x: x.iloc[-1] - x.iloc[0])
-             )
-        )
-    
-    df['rollingPctIncrease'] = [
-        increase if daysAfterOutbreak >= outbreakThreshold else np.nan
-        for increase, daysAfterOutbreak in 
-        df[['rollingPctIncrease', 'daysAfterOnset']].values.tolist()
-        ]
-    
-    
-    df['rollingGrowthRate'] = (df[case].rolling(window = windowSize)
-                 .apply(lambda x: np.log(x.iloc[-1] / x.iloc[0]))
-        /
-        (df['daysAfterOnset'].rolling(window = windowSize)
-             .apply(lambda x: x.iloc[-1] - x.iloc[0])
-             )
-        )
-
-
-    df['rollingGrowthRate'] = [
-        growthRate if daysAfterOutbreak >= outbreakThreshold else np.nan
-        for growthRate, daysAfterOutbreak in 
-        df[['rollingGrowthRate', 'daysAfterOnset']].values.tolist()
-        ]
-    
-    
-    df['rollingDoubleRate'] = [
-        np.log(2)/growthRate if daysAfterOutbreak >= outbreakThreshold
-        else np.nan
-        for growthRate, daysAfterOutbreak in 
-        df[['rollingGrowthRate', 'daysAfterOnset']].values.tolist()
-        ]
-    
-    return df
-
-
-
 
 for df, threshold in ((dailyReportState, 50), 
                       (dailyReportCountry, 100)):
@@ -624,6 +751,7 @@ dailyReportState = (
         )
 
 
+
 #%% MOST RECENT DATA
 ## ############################################################################
 
@@ -645,6 +773,8 @@ currentStatsUS = (
     )
 
 
+
+
 #%% VISUALIZE MOST IMPACTED COUNTRIES
 ## ###########################################################################
 
@@ -656,6 +786,7 @@ fig, axArr = plt.subplots(nrows = 2, ncols = 2,
                           )
 
 confirmedThreshold = 5000
+
 
 for ax, case in enumerate(
         ('Confirmed', 'Deaths', 'deathRate', 'rollingDoubleRate')
@@ -817,46 +948,161 @@ dailyReportCountry.to_csv(
 
 
 
+#%% US CENSUS DATA
+## ############################################################################
+
+# source: https://www.census.gov/data/tables/time-series/demo/popest/2010s-state-total.html#par_textimage
+
+usPop = pd.read_csv('external_data\\us_census_data\\nst-est2019-alldata.csv')
+
+usPopDict = {
+    state : population for state, population in 
+    usPop[['NAME', 'POPESTIMATE2019']].values.tolist()
+    }
+
+
+
+# Add population data
+dailyReportState['population'] = [
+    usPopDict.get(state, 0) if country == 'US'
+    else 0
+    for country, state in 
+    dailyReportState[['Country/Region', 'Province/State']].values.tolist()
+    ]
+
+dailyReportState['susceptiblePct'] = [
+    (pop - confirmed) / pop if pop > 0 
+    else 1
+    for pop, confirmed in 
+    dailyReportState[['population', 'Confirmed']].values.tolist()
+    ]
+
+# Infected %
+dailyReportState['infectedPct'] = [
+    confirmed / pop if pop > 0 
+    else 0
+    for pop, confirmed in 
+    dailyReportState[['population', 'Confirmed']].values.tolist()
+    ]
+
+
+# Estimate b coefficients for SIR model
+dailyReportState = (
+    dailyReportState
+        .groupby(['Country/Region', 'Province/State'])
+        .apply(lambda c: rollingSIRb(c))
+        )
+
+
+
+currentStatsUS = (
+    dailyReportState[
+        (dailyReportState['reportDate'] 
+        == dailyReportState['reportDate'].max())
+        & (dailyReportState['Confirmed'] > 1000)
+        & (dailyReportState['Country/Region']=='US')]
+    )
+
+
+x = dailyReportState[dailyReportState['Province/State']=='Illinois']
+
+
+y = rollingSIRb(x, case = 'infectedPct')
+
+df = x
+
+#%% SIR MODEL
+## ###########################################################################
+
+# source: https://www.maa.org/press/periodicals/loci/joma/the-sir-model-for-spread-of-disease-the-differential-equation-model
+
+population = 10000
+infectedStart = 1
+recoveredStart = 0
+fatalStart = 0
+
+# recovery rate k
+recoverRate = (1/14)
+
+
+
+x = dailyReportState[dailyReportState['Province/State']=='New York']
+
+
+y = rollingSIRb(dailyReportState[dailyReportState['Province/State']=='New York'], case = 'infectedPct')
+
+
+nySim = sirModelSim(N = x['population'], 
+                    I0 = x['Confirmed'], 
+                    b = x['rollingSIRb'], 
+                    k = 1/14, 
+                    dayRange = 100
+                    )
+
+x = y.iloc[-1,:]
+
+ilSim = sirModelSim(N = x['population'], 
+                    I0 = x['Confirmed'], 
+                    b = x['rollingSIRb'], 
+                    k = 1/14, 
+                    dayRange = 100
+                    )
+
+
+fig, ax = plt.subplots(1)
+
+plt.stackplot(nySim['days'], ilSim[[
+ 'infectedPct',
+ 'susceptiblePct',
+ 'recoveredPct']].T.values.tolist(), labels=[ 'infectedPct',
+ 'susceptiblePct',
+ 'recoveredPct'], colors = ['r', 'b', 'g'])
+plt.legend(loc='upper left')
+plt.show()
+
+
+#%% DAILY REPORT DATA FILL
+## ###########################################################################
+
+# Populate all days for all locations
+
+# All unique locations
+uniqueLocations = list(set(
+    [tuple(x) for x in 
+      dailyReport[['Country/Region', 'Province/State', 'Admin2']].values]
+    ))
+
+# Create shell for filling data
+dailyReportFull = pd.DataFrame([
+    (*l, d) for l, d in 
+    product(uniqueLocations, 
+            [str(dte.date()) 
+              for dte in pd.to_datetime(fileDates)])
+    ],
+    columns = ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
+    )
+
+
+# Populate with reported data
+dailyReportFull = (
+    dailyReportFull.set_index(
+        ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
+        )
+    .merge(dailyReport.set_index(
+        ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
+        ),
+        left_index = True,
+        right_index = True,
+        how = 'left'
+        )
+    .reset_index()
+    )
+
+
 
 #%% DEV
 ## ###########################################################################
 
-# #%% DAILY REPORT DATA FILL
-# ## ###########################################################################
-
-# # Populate all days for all locations
-
-# # All unique locations
-# uniqueLocations = list(set(
-#     [tuple(x) for x in 
-#      dailyReport[['Country/Region', 'Province/State', 'Admin2']].values]
-#     ))
-
-# # Create shell for filling data
-# dailyReportFull = pd.DataFrame([
-#     (*l, d) for l, d in 
-#     product(uniqueLocations, 
-#             [str(dte.date()) 
-#              for dte in pd.to_datetime(fileDates)])
-#     ],
-#     columns = ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
-#     )
-
-
-# # Populate with reported data
-# dailyReportFull = (
-#     dailyReportFull.set_index(
-#         ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
-#         )
-#     .merge(dailyReport.set_index(
-#         ['Country/Region', 'Province/State', 'Admin2', 'reportDate']
-#         ),
-#         left_index = True,
-#         right_index = True,
-#         how = 'left'
-#         )
-#     .reset_index()
-#     )
 
 
 
