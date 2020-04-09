@@ -239,6 +239,12 @@ def rollingGrowthRate(df, windowSize = 4, case = 'Confirmed', outbreakThreshold 
         df[['rollingGrowthRate', 'daysAfterOnset']].values.tolist()
         ]
     
+    df.rename(columns = {
+        'rollingGrowthRate':'rollingGrowthRate{}'.format(case),
+        'rollingDoubleRate':'rollingDoubleRate{}'.format(case)
+        },
+        inplace = True)
+    
     return df
 
 #%% ENVIRONMENT
@@ -361,7 +367,20 @@ del(dailyReportUSDeaths)
 
 
 
+#%% DATA TRANSFORMATIONS
+## ############################################################################
 
+# Format reportDate as YYYY-MM-DD
+dailyReportGlobal['reportDate'] = [
+    pd.to_datetime(dte) # .strftime('%Y-%m-%d')
+    for dte in dailyReportGlobal['reportDate'].values.tolist()
+    ]
+
+# Format reportDate as YYYY-MM-DD
+dailyReportUS['reportDate'] = [
+    pd.to_datetime(dte) # .strftime('%Y-%m-%d')
+    for dte in dailyReportUS['reportDate'].values.tolist()
+    ]
 
 
 #%% AGGREGATE DAILY DATA
@@ -444,22 +463,39 @@ dailyReportState.sort_values(
 ## ############################################################################
 
 
-for df, threshold in ((dailyReportState, 50), 
-                      (dailyReportCountry, 100),
-                      (dailyReportUSDetail, 20)):
+for df, thresholdConfirmed, thresholdDeath in (
+        (dailyReportState, 50, 25), 
+        (dailyReportCountry, 100, 50),
+                      # (dailyReportUSDetail, 20)
+                      ):
     
-    df['growthRate'] = [
-        (np.log(casesToday/threshold) / days) if days > 0 else 0
+    df['growthRateConfirmed'] = [
+        (np.log(casesToday/thresholdConfirmed) / days) if days > 0 else 0
         for days, casesToday in 
         df[['daysAfterOnset', 'Confirmed']].values.tolist()
         ]
     
     
-    df['doublingRate'] = [
+    df['doublingRateConfirmed'] = [
         np.log(2)/growthRate if daysAfterOutbreak >= 5
         else np.nan
         for growthRate, daysAfterOutbreak in 
-        df[['growthRate', 'daysAfterOnset']].values.tolist()
+        df[['growthRateConfirmed', 'daysAfterOnset']].values.tolist()
+        ]
+    
+ 
+    df['growthRateDeaths'] = [
+        (np.log(casesToday/thresholdConfirmed) / days) if days > 0 else 0
+        for days, casesToday in 
+        df[['daysAfterOnset', 'Deaths']].values.tolist()
+        ]
+    
+    
+    df['doublingRateDeaths'] = [
+        np.log(2)/growthRate if daysAfterOutbreak >= 5
+        else np.nan
+        for growthRate, daysAfterOutbreak in 
+        df[['growthRateDeaths', 'daysAfterOnset']].values.tolist()
         ]
     
     
@@ -467,14 +503,18 @@ for df, threshold in ((dailyReportState, 50),
 dailyReportCountry = (
     dailyReportCountry
         .groupby('Country/Region')
-        .apply(lambda c: rollingGrowthRate(c))
+        .apply(lambda c: rollingGrowthRate(c, case = 'Confirmed'))
+        .groupby('Country/Region')
+        .apply(lambda c: rollingGrowthRate(c, case = 'Deaths'))
         )
 
 
 dailyReportState = (
     dailyReportState
         .groupby(['Country_Region', 'Province_State'])
-        .apply(lambda c: rollingGrowthRate(c))
+        .apply(lambda c: rollingGrowthRate(c, case = 'Confirmed'))
+        .groupby(['Country_Region', 'Province_State'])
+        .apply(lambda c: rollingGrowthRate(c, case = 'Deaths'))
         )
 
 
@@ -483,16 +523,17 @@ dailyReportState = (
 
 sns.set_context('paper')
 
-fig, axArr = plt.subplots(nrows = 2, ncols = 2,
+fig, axArr = plt.subplots(nrows = 2, ncols = 3,
                           figsize = (0.9*GetSystemMetrics(0)//96, 
                                     0.8*GetSystemMetrics(1)//96)
                           )
 
-confirmedThreshold = 5000
+confirmedThreshold = 50000
 
 
 for ax, case in enumerate(
-        ('Confirmed', 'Deaths', 'deathRate', 'rollingDoubleRate')
+        ('Confirmed', 'Deaths', 'deathRate', 
+         'rollingDoubleRateConfirmed', 'rollingDoubleRateDeaths')
         ):
 
     plotDict = {
@@ -530,7 +571,7 @@ for ax, case in enumerate(
                        )
 
 
-    if case == 'rollingDoubleRate':
+    if case.find('rollingDoubleRate') >= 0:
         axArr.flatten()[ax].set_ylim(
             (0, min(
                 max(axArr.flatten()[ax].get_ylim()), 20)
@@ -539,13 +580,13 @@ for ax, case in enumerate(
 
 for i, ax in enumerate(axArr.flatten()):
         # Put legend in 2nd figure
-    if i == 1:
+    if i == 2:
         ax.legend(bbox_to_anchor = (1.04,1), borderaxespad=0)
     else:
         ax.legend().remove()
 
 
-fig.suptitle('Countries with > {} Confirmed Cases'.format(confirmedThreshold), 
+fig.suptitle('Countries with > {:,} Confirmed Cases'.format(confirmedThreshold), 
              fontsize = 24)
 
 
@@ -555,14 +596,14 @@ fig.suptitle('Countries with > {} Confirmed Cases'.format(confirmedThreshold),
 
 # Plot Confirmed Cases, Deaths, and Death Rate
         
-fig, axArr = plt.subplots(nrows = 2, ncols = 2,
+fig, axArr = plt.subplots(nrows = 2, ncols = 3,
                           figsize = (0.9*GetSystemMetrics(0)//96, 
                                     0.8*GetSystemMetrics(1)//96)
                           )
 
-confirmedThreshold = 2000
+confirmedThreshold = 5000
 
-plotData = dailyReportState[
+plotData = (dailyReportState[
     (dailyReportState['Confirmed'] > 20) # At least 20 cases reports
     & [stateCases.get((country, state), 
                       {'Confirmed':0}
@@ -570,19 +611,22 @@ plotData = dailyReportState[
     for country, state in 
     dailyReportState[['Country_Region', 'Province_State']].values.tolist()]
     ]
+    )
 
 
 
 for ax, case in enumerate(
-        ('Confirmed', 'Deaths', 'deathRate', 'rollingDoubleRate')
+        ('Confirmed', 'Deaths', 'deathRate', 
+         'rollingDoubleRateConfirmed', 'rollingDoubleRateDeaths')
         ):
+
 
     plotDict = {
         'x' : 'reportDate',
         'y' : case,
         'hue' : 'Province_State',
         'palette' : 'tab20',
-        'data' : plotData.sort_values('reportDate'),
+        'data' : plotData,
         'ax' : axArr.flatten()[ax],
         }
 
@@ -607,7 +651,9 @@ for ax, case in enumerate(
                            axArr.flatten()[ax].get_yticks()
                            )
                        )
-    if case == 'rollingDoubleRate':
+    
+    
+    if case.find('rollingDoubleRate') >= 0:
         # 20 or the current axis limit, whichever is lower
         axArr.flatten()[ax].set_ylim(
             (0, min(
@@ -618,12 +664,12 @@ for ax, case in enumerate(
         
 for i, ax in enumerate(axArr.flatten()):
         # Put legend in 2nd figure
-    if i == 1:
+    if i == 2:
         ax.legend(bbox_to_anchor = (1.04,1), borderaxespad=0)
     else:
         ax.legend().remove()
 
 
-fig.suptitle('US States with > {} Confirmed Cases'.format(confirmedThreshold), 
+fig.suptitle('US States with > {:,} Confirmed Cases'.format(confirmedThreshold), 
              fontsize = 24)
 
