@@ -20,10 +20,10 @@ from win32api import GetSystemMetrics
 import sys
 
 # Format plots for 4k screens
-if plt.get_backend() == 'Qt5Agg':
-    from matplotlib.backends.qt_compat import QtWidgets
-    qApp = QtWidgets.QApplication(sys.argv)
-    plt.matplotlib.rcParams['figure.dpi'] = qApp.desktop().physicalDpiX()
+# if plt.get_backend() == 'Qt5Agg':
+#     from matplotlib.backends.qt_compat import QtWidgets
+#     qApp = QtWidgets.QApplication(sys.argv)
+#     plt.matplotlib.rcParams['figure.dpi'] = qApp.desktop().physicalDpiX()
 
 #%% FUNCTIONS
 ## ############################################################################
@@ -785,7 +785,7 @@ fig, axArr = plt.subplots(nrows = 2, ncols = 2,
                                     0.8*GetSystemMetrics(1)//96)
                           )
 
-confirmedThreshold = 5000
+confirmedThreshold = 10000
 
 
 for ax, case in enumerate(
@@ -842,7 +842,7 @@ for i, ax in enumerate(axArr.flatten()):
         ax.legend().remove()
 
 
-fig.suptitle('Countries with > {} Confirmed Cases'.format(confirmedThreshold), 
+fig.suptitle('Countries with > {:,} Confirmed Cases'.format(confirmedThreshold), 
              fontsize = 24)
 
 
@@ -857,7 +857,7 @@ fig, axArr = plt.subplots(nrows = 2, ncols = 2,
                                     0.8*GetSystemMetrics(1)//96)
                           )
 
-confirmedThreshold = 2000
+confirmedThreshold = 5000
 
 plotData = dailyReportState[
     (dailyReportState['Country/Region'] == 'US')
@@ -922,7 +922,7 @@ for i, ax in enumerate(axArr.flatten()):
         ax.legend().remove()
 
 
-fig.suptitle('US States with > {} Confirmed Cases'.format(confirmedThreshold), 
+fig.suptitle('US States with > {:,} Confirmed Cases'.format(confirmedThreshold), 
              fontsize = 24)
 
 
