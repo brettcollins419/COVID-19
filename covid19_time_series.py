@@ -518,6 +518,28 @@ dailyReportState = (
         )
 
 
+#%% MOST RECENT DATA
+## ############################################################################
+
+currentStats = (
+    dailyReportCountry[
+        (dailyReportCountry['reportDate'] 
+        == dailyReportCountry['reportDate'].max())]
+    )
+
+
+
+currentStatsUS = (
+    dailyReportState[
+        (dailyReportState['reportDate'] 
+        == dailyReportState['reportDate'].max())
+        & (dailyReportState['Country_Region']=='US')]
+    )
+
+
+
+
+
 #%% VISUALIZE MOST IMPACTED COUNTRIES
 ## ###########################################################################
 
